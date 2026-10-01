@@ -1,0 +1,8 @@
+{
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "node \"E:/Prodev/G2B_Helper/scripts/harness/hook.mjs\" claude", "timeout": 30}]}],
+    "PreToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": "node \"E:/Prodev/G2B_Helper/scripts/harness/hook.mjs\" claude", "timeout": 30}]}],
+    "PostToolUse": [{"matcher": ".*", "hooks": [{"type": "command", "command": "node \"E:/Prodev/G2B_Helper/scripts/harness/hook.mjs\" claude", "timeout": 30}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "node \"E:/Prodev/G2B_Helper/scripts/harness/hook.mjs\" claude", "timeout": 30}]}]
+  }
+}

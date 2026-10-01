@@ -1,0 +1,85 @@
+// Real Edge + temporary SQLite Native Host. Chrome transport is a local harness.
+import {chromium,expect} from '@playwright/test';
+import {spawn} from 'node:child_process';
+import {createServer} from 'node:http';
+import {readFile,mkdir,writeFile,mkdtemp} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+const root=process.cwd(),temporary=await mkdtemp(path.join(tmpdir(),'pce-db-ui-'));
+const evidence=path.join(root,'dist/evidence/database');await mkdir(evidence,{recursive:true});
+const native=spawn(path.join(root,'.venv/Scripts/python.exe'),['native/host.py','--database',path.join(temporary,'test.sqlite3')],{cwd:root,windowsHide:true});
+let buffer=Buffer.alloc(0);const pending=new Map();
+native.stdout.on('data',chunk=>{buffer=Buffer.concat([buffer,chunk]);while(buffer.length>=4&&buffer.length>=buffer.readUInt32LE(0)+4){const size=buffer.readUInt32LE(0),response=JSON.parse(buffer.subarray(4,size+4));buffer=buffer.subarray(size+4);const entry=pending.get(response.requestId);if(!entry)continue;if(response.chunk){entry.parts[response.chunk.index]=response.chunk.text;if(entry.parts.filter(Boolean).length<response.chunk.total)continue;entry.resolve(JSON.parse(entry.parts.join('')));}else entry.resolve(response);pending.delete(response.requestId);}});
+native.stderr.on('data',chunk=>process.stderr.write(chunk));
+function envelope(request){return new Promise((resolve,reject)=>{pending.set(request.requestId,{resolve,reject,parts:[]});const bytes=Buffer.from(JSON.stringify(request)),length=Buffer.alloc(4);length.writeUInt32LE(bytes.length);native.stdin.write(Buffer.concat([length,bytes]));});}
+async function sql(command,payload={}){const response=await envelope({protocolVersion:1,requestId:crypto.randomUUID(),command,payload});if(response.error)throw Error(JSON.stringify(response.error));return response.result;}
+async function setting(key,value){const observed=await sql('settings.read',{key});return sql('settings.save',{key,value,storeVersion:observed.storeVersion});}
+const server=createServer(async(req,res)=>{try{const pathname=new URL(req.url,'http://localhost').pathname,target=path.resolve(root,'dist/extension','.'+pathname);if(!target.startsWith(path.join(root,'dist/extension')+path.sep))throw Error('path');res.setHeader('Content-Type',target.endsWith('.js')?'text/javascript':target.endsWith('.css')?'text/css':'text/html; charset=utf-8');res.end(await readFile(target));}catch{res.statusCode=404;res.end('Not found');}});
+await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const base='http://127.0.0.1:'+server.address().port;
+const browser=await chromium.launch({channel:'msedge',headless:true}),context=await browser.newContext({viewport:{width:1440,height:1000},acceptDownloads:true});
+const errors=[],checks=[],openRequests=[];context.on('page',page=>page.on('pageerror',error=>errors.push(String(error))));
+await context.exposeBinding('pceHarness',async(_,message)=>{if(message.type==='gateway')return envelope(message.request);if(message.type==='context.read')return {url:'https://fixture.test/db',title:'DB 합성 문맥',screenKey:'fixture-screen'};if(message.type==='surface.open'){openRequests.push(message.surface);return {sourceTabId:9};}return {error:'Unhandled '+message.type};});
+await context.addInitScript(()=>{window.chrome={runtime:{id:'pce-db-harness',onMessage:{addListener:()=>{},removeListener:()=>{}},sendMessage:message=>window.pceHarness(message)}};});
+const db=await context.newPage();
+try{
+ await setting('dictionary.keys',{code:'코드 사전',amount:'금액 사전'});
+ await setting('dictionary.codes',{code:{'00':'접수 사전'}});
+ await setting('dictionary.hidden',['secret']);
+ const table=await sql('dataset.create',{name:'빈 표 검증',columns:[{field:'code',kind:'code',editable:true},{field:'amount',kind:'decimal',editable:true},{field:'blank',label:'빈 열',kind:'text'},{field:'secret',kind:'text'}],rows:[],duplicatePolicy:{mode:'allow',keys:[]}});
+ await db.goto(base+'/feature.html?surface=db&sourceTabId=9&sourceId='+table.sourceId);
+ await expect(db.locator('.db-tabs button.active')).toHaveText('빈 표 검증');
+ const cell=(field,line=0)=>db.locator('.db-grid .tabulator-row .tabulator-cell[tabulator-field="'+field+'"]').nth(line);
+ await expect(cell('code')).toBeVisible();await expect(cell('blank')).toBeVisible();await expect(db.locator('.db-grid .tabulator-cell[tabulator-field="secret"]')).toHaveCount(0);
+ await expect(db.locator('.db-grid .tabulator-col[tabulator-field="code"]')).toContainText('코드 사전');await expect(db.locator('.db-grid .tabulator-col[tabulator-field="amount"]')).toContainText('금액 사전');
+ await expect(db.locator('.db-grid .tabulator-row')).toHaveCount(12);await expect(db.getByRole('button',{name:'저장',exact:true})).toBeDisabled();
+ await expect(db.getByRole('button',{name:'선택 상세',exact:true})).toHaveCount(0);await expect(db.getByRole('button',{name:'수집 관리',exact:true})).toHaveCount(0);await expect(db.getByRole('button',{name:'사전 관리',exact:true})).toHaveCount(0);
+ checks.push('empty:grid-slots-and-all-unhidden-dictionary-columns');
+ await context.grantPermissions(['clipboard-read','clipboard-write']);
+ await cell('code').click();await expect(cell('code').locator('input')).toHaveCount(0);await db.keyboard.type('00');await db.keyboard.press('Enter');await expect(cell('code')).toHaveText('접수 사전');
+ await cell('amount').dblclick();await cell('amount').locator('input').fill('0.1');await db.keyboard.press('Enter');
+ await cell('amount',1).dblclick();await cell('amount',1).locator('input').fill('0.2');await db.keyboard.press('Enter');
+ expect((await sql('table.read',{sourceId:table.sourceId})).rows).toHaveLength(0);
+ expect(await db.evaluate(()=>{const event=new Event('pce:close-check',{cancelable:true});window.dispatchEvent(event);return event.defaultPrevented;})).toBe(true);
+ checks.push('blank-row:typing-buffers-records-with-close-guard');
+ await cell('amount').click();await db.keyboard.press('F2');await cell('amount').locator('input').fill('999');await db.keyboard.press('Escape');await expect(cell('amount')).toHaveText('0.1');
+ await cell('amount').click();await db.keyboard.press('F2');await cell('amount').locator('input').fill('0.1');await db.keyboard.press('Tab');await expect(cell('blank').locator('input')).toBeVisible();await db.keyboard.press('Escape');
+ checks.push('keyboard:selection-f2-escape-tab');
+ await db.getByRole('button',{name:'저장',exact:true}).click();await expect.poll(async()=>(await sql('table.read',{sourceId:table.sourceId})).rows.length).toBe(2);
+ await expect(db.getByRole('button',{name:'저장',exact:true})).toBeDisabled();await expect(db.getByRole('button',{name:'다시 읽기',exact:true})).toBeEnabled();expect(await db.evaluate(()=>{const event=new Event('pce:close-check',{cancelable:true});window.dispatchEvent(event);return event.defaultPrevented;})).toBe(false);
+ checks.push('save:only-entered-drafts-not-placeholder-rows');
+ await cell('amount',1).dblclick();await cell('amount',1).locator('input').fill('=SUM(B1:B2)');await db.keyboard.press('Enter');await expect(cell('amount',1)).toHaveText('0.3');
+ await cell('amount',1).dblclick();await cell('amount',1).locator('input').fill('=FETCH(1)');await db.keyboard.press('Enter');await expect(cell('amount',1)).toHaveText('0.3');await expect(db.getByRole('alert')).toContainText('지원하지 않는 함수');
+ await cell('amount').click();await db.getByLabel('셀 값 또는 수식').fill('=(1+2)/10');await db.getByRole('button',{name:'적용',exact:true}).click();await expect(cell('amount')).toHaveText('0.3');
+ checks.push('formula:direct-cell-and-bar-decimal-result-invalid-keeps-old');
+ await db.getByRole('button',{name:'열 추가',exact:true}).click();await expect(cell('column_1')).toBeVisible();
+ const header=db.locator('.db-grid .tabulator-col[tabulator-field="column_1"] input');await header.fill('추가 열');await header.press('Enter');
+ await cell('column_1').dblclick();await cell('column_1').locator('input').fill('입력값');await db.keyboard.press('Enter');
+ await expect(cell('amount')).toHaveText('0.3');await db.getByRole('button',{name:'저장',exact:true}).click();
+ await expect.poll(async()=>(await sql('table.read',{sourceId:table.sourceId})).rows[0].column_1).toBe('입력값');
+ const persisted=await sql('table.read',{sourceId:table.sourceId});expect(persisted.columns.find(column=>column.field==='column_1').label).toBe('추가 열');expect(persisted.rows.map(row=>row.amount)).toEqual(['0.3','0.3']);expect(persisted.rows.some(row=>Object.values(row).some(value=>typeof value==='string'&&value.startsWith('=')))).toBe(false);
+ checks.push('column:header-plus-inline-title-and-cell-atomic-save');
+ await db.reload();await expect(cell('column_1')).toHaveText('입력값');await expect(cell('code')).toHaveText('접수 사전');
+ await cell('code').click();await db.keyboard.press('Shift+ArrowRight');await db.keyboard.press('Control+c');await expect.poll(()=>db.evaluate(()=>navigator.clipboard.readText())).toBe('00\t0.3');
+ await db.evaluate(()=>navigator.clipboard.writeText('00\t0.4'));await db.keyboard.press('Control+v');await expect(cell('amount')).toHaveText('0.4');
+ db.once('dialog',dialog=>dialog.dismiss());await db.getByRole('button',{name:'다시 읽기',exact:true}).click();await expect(cell('amount')).toHaveText('0.4');db.once('dialog',dialog=>dialog.accept());await db.getByRole('button',{name:'다시 읽기',exact:true}).click();await expect(cell('amount')).toHaveText('0.3');
+ checks.push('clipboard:raw-range-copy-paste-and-discard-guard');
+ await cell('amount',11).dblclick();await cell('amount',11).locator('input').fill('4');await db.keyboard.press('Enter');await expect(db.locator('.db-grid .tabulator-row')).toHaveCount(13);expect((await sql('table.read',{sourceId:table.sourceId})).rows).toHaveLength(2);db.once('dialog',dialog=>dialog.accept());await db.getByRole('button',{name:'다시 읽기',exact:true}).click();await expect(db.locator('.db-grid .tabulator-row')).toHaveCount(12);checks.push('blank-row:last-slot-replenishes-without-writing');
+ await db.getByRole('button',{name:'공통',exact:true}).click();await expect(db.locator('.db-tabs button')).not.toContainText(['빈 표 검증']);await expect(db.locator('.db-sidebar .db-table-list')).not.toContainText('공고');
+ const common=await db.locator('.db-tabs button').allTextContents();await db.getByRole('button',{name:'시스템',exact:true}).click();await expect(db.locator('.db-tabs')).toContainText('런처');await expect(db.locator('.db-sidebar .db-table-list')).not.toContainText('연락처');
+ await db.getByRole('button',{name:'공통',exact:true}).click();await expect.poll(()=>db.locator('.db-tabs button').allTextContents()).toEqual(common);await db.getByRole('button',{name:'업무',exact:true}).click();await expect.poll(async()=>(await db.locator('.db-tabs button').allTextContents()).slice(0,3)).toEqual(['통합','공고','공고 물품']);
+ checks.push('groups:fixed-list-and-tabs-no-accumulation-notices-first');
+ await db.locator('.db-tabs').getByRole('button',{name:'빈 표 검증',exact:true}).click();await db.getByRole('button',{name:'설정',exact:true}).click();await expect(db.getByRole('button',{name:'관계 설정',exact:true})).toBeVisible();await db.getByRole('button',{name:'SQL 조회',exact:true}).click();await db.getByRole('button',{name:'백업·복원',exact:true}).click();expect(openRequests).toEqual(['sql','backup']);await db.getByRole('button',{name:'DB 보조 패널 닫기'}).click();
+ const right=await sql('dataset.create',{name:'관계 대상',columns:[{field:'code',kind:'text'}],rows:[{code:'00'}],duplicatePolicy:{mode:'allow',keys:[]}});
+ const definition={name:'검증 연결',leftSourceId:table.sourceId,rightSourceId:right.sourceId,fieldPairs:[{left:'code',right:'code'}],cardinality:'many'};const preview=await sql('relation.preview',{definition});await sql('relation.save',{definition,previewToken:preview.previewToken});
+ await db.getByRole('button',{name:'다시 읽기',exact:true}).click();await db.locator('.db-tabs').getByRole('button',{name:'통합',exact:true}).click();await expect(db.getByLabel('통합 관계')).toContainText('검증 연결');await expect(db.locator('.db-grid .tabulator-cell[tabulator-field="left.code"]').first()).toHaveText('접수 사전');
+ await db.getByRole('button',{name:'관계도',exact:true}).click();await expect(db.getByLabel('저장된 관계도')).toContainText('빈 표 검증');await expect(db.getByLabel('저장된 관계도')).toContainText('관계 대상');await expect(db.getByLabel('저장된 관계도')).toContainText('코드 사전');
+ checks.push('integration:saved-relation-table-diagram-and-settings');
+ await db.screenshot({path:path.join(evidence,'integration.png')});await db.getByRole('button',{name:'표',exact:true}).click();await db.locator('.db-tabs').getByRole('button',{name:'빈 표 검증',exact:true}).click();
+ const appearance=await sql('settings.read',{key:'ui.appearance'});await sql('settings.save',{key:'ui.appearance',value:{theme:'light'},storeVersion:appearance.storeVersion});await db.reload();await expect(cell('code')).toHaveText('접수 사전');await db.screenshot({path:path.join(evidence,'db-light.png')});
+ const light=await db.locator('.db-grid .tabulator-row').first().evaluate(element=>getComputedStyle(element).backgroundColor);const lightHeader=await db.locator('.db-grid .tabulator-col[tabulator-field="code"]').evaluate(element=>getComputedStyle(element).backgroundColor);expect(lightHeader).toBe('rgb(255, 255, 255)');
+ const current=await sql('settings.read',{key:'ui.appearance'});await sql('settings.save',{key:'ui.appearance',value:{theme:'dark'},storeVersion:current.storeVersion});await db.reload();await expect(cell('code')).toHaveText('접수 사전');await db.screenshot({path:path.join(evidence,'db-dark.png')});const dark=await db.locator('.db-grid .tabulator-row').first().evaluate(element=>getComputedStyle(element).backgroundColor);expect(light).not.toBe(dark);
+ const bounds=await db.locator('.db-grid').boundingBox();expect(bounds.height).toBeGreaterThan(650);expect(errors).toEqual([]);checks.push('layout:full-height-grid-theme-variables-no-page-errors');
+ const result={executedAt:new Date().toISOString(),passed:checks.length,checks,limitations:['Real Edge UI and temporary SQLite; Chrome runtime messaging is a harness. Installed extension and live G2B not tested.'],database:temporary};await writeFile(path.join(evidence,'results.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));
+}catch(error){await db.screenshot({path:path.join(evidence,'failure.png')}).catch(()=>{});console.error(error);process.exitCode=1;}
+finally{await browser.close();server.close();native.stdin.end();native.kill();}

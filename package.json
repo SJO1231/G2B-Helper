@@ -1,0 +1,51 @@
+{
+  "name": "pce-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "tsc --noEmit && vite build && node scripts/build-extension.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "verify": "npm run check:boundaries && npm run check:extension && npm run typecheck && npm run test && npm run build",
+    "dev": "vite --host 127.0.0.1",
+    "check:boundaries": "node scripts/check-boundaries.mjs",
+    "package:bookmarklet": "node scripts/package-bookmarklet.mjs",
+    "check:extension": "node scripts/check-extension.mjs",
+    "build:bookmarklet:historical": "node scripts/build-bookmarklet.mjs",
+    "package:extension": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-extension.ps1",
+    "test:extension:ui": "node scripts/verify-extension-browser.mjs",
+    "test:extension:runtime": "node scripts/verify-extension-runtime.mjs",
+    "test:extension:notes": "node scripts/verify-notes-v4.mjs",
+    "test:extension:launcher": "node scripts/verify-launcher-v4.mjs",
+    "test:extension:collection": "node scripts/verify-collection-aggregation.mjs",
+    "test:extension:database": "node scripts/verify-extension-database.mjs",
+    "build:mvp": "tsc --noEmit && node scripts/build-mvp.mjs",
+    "verify:mvp": "node scripts/harness/cli.mjs run M01 implementer mvp-typecheck && node scripts/harness/cli.mjs run M01 implementer mvp-test && node scripts/harness/cli.mjs run M01 implementer mvp-build && node scripts/harness/cli.mjs run M01 implementer mvp-host-build && node scripts/harness/cli.mjs run M01 implementer mvp-native-test && node scripts/harness/cli.mjs run M01 implementer mvp-ui-test && node scripts/harness/cli.mjs run M01 implementer mvp-package && node scripts/harness/cli.mjs run M01 implementer mvp-archive-test && node scripts/harness/cli.mjs verify M01 implementer",
+    "package:mvp": "node scripts/package-mvp.mjs --build-host"
+  },
+  "dependencies": {
+    "decimal.js": "10.6.0",
+    "fflate": "0.8.3",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "tabulator-tables": "6.5.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/chrome": "0.1.24",
+    "@types/node": "24.10.1",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@types/tabulator-tables": "6.3.4",
+    "@vitejs/plugin-react": "5.0.4",
+    "esbuild": "0.25.11",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vitest": "4.1.11"
+  }
+}

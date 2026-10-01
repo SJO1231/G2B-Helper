@@ -1,0 +1,13 @@
+[
+  {"name":"multi exact","row":{"org":"경기","status":"진행"},"filter":{"join":"and","conditions":[{"field":"org","operator":"equals","values":["서울","경기"]},{"field":"status","operator":"notEquals","values":["취소","종료"]}]},"expected":true},
+  {"name":"negative all","row":{"name":"복합기 프린터"},"filter":{"join":"and","conditions":[{"field":"name","operator":"notContains","values":["프린터","스캐너"]}]},"expected":false},
+  {"name":"same field repeated","row":{"name":"복합기 프린터"},"filter":{"join":"and","conditions":[{"field":"name","operator":"contains","values":["프린터"]},{"field":"name","operator":"contains","values":["복합기"]}]},"expected":true},
+  {"name":"leading zero","row":{"code":"01"},"filter":{"join":"or","conditions":[{"field":"code","operator":"equals","values":["1"]}]},"expected":false},
+  {"name":"false preserved","row":{"flag":false},"filter":{"join":"and","conditions":[{"field":"flag","operator":"equals","values":["false"]}]},"expected":true},
+  {"name":"zero preserved","row":{"n":0},"filter":{"join":"and","conditions":[{"field":"n","operator":"empty","values":[]}]},"expected":false},
+  {"name":"null excluded","row":{"n":null},"filter":{"join":"and","conditions":[{"field":"n","operator":"notEquals","values":["a"]}]},"expected":false},
+  {"name":"null included","row":{"n":null},"filter":{"join":"and","conditions":[{"field":"n","operator":"notEquals","values":["a"],"includeEmpty":true}]},"expected":true},
+  {"name":"json path","row":{"details":{"codes":["01","02"]}},"filter":{"join":"and","conditions":[{"field":"details","path":["codes","1"],"operator":"equals","values":["02"]}]},"expected":true},
+  {"name":"exact decimal","row":{"amount":"9007199254740993.5"},"filter":{"join":"and","conditions":[{"field":"amount","operator":"gt","values":["9007199254740993.4"]}]},"expected":true},
+  {"name":"label","row":{"code":"01"},"filter":{"join":"and","conditions":[{"field":"code","operator":"equals","values":["진행"],"compareAs":"label"}]},"dictionaries":{"code":{"01":"진행"}},"expected":true}
+]

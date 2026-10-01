@@ -1,0 +1,14 @@
+node_modules/
+dist/
+build/
+__pycache__/
+*.pyc
+*.sqlite*
+*.db
+.pytest_cache/
+.venv/
+artifacts/
+.codex/harness-state/
+참고자료/
+native/vendor/
+*.spec

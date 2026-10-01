@@ -1,0 +1,345 @@
+"""Small SQLite owner for the manual G2B Helper MVP. No legacy Store is opened."""
+import copy
+import json
+import sqlite3
+import threading
+import re
+from datetime import datetime, timezone
+from urllib.parse import urlparse
+from .model import Fault, require, dumps, loads, digest, empty
+from .dictionary_seed import DEFAULTS
+
+IDENTITIES = {'receipt': ['ctrtDmndRcptNo', 'ctrtDmndRcptOrd'], 'bid': ['bidPbancNo', 'bidPbancOrd'], 'contract': ['ctrtNo', 'ctrtChgOrd']}
+SCREENS = {'receipt': ('01001', {'01114', '01117'}), 'bid': ('01173', {'01174'}), 'contract': ('01570', {'01571'})}
+ITEM_KEYS = {'receipt': ['ctrtDmndRcptItemSqno'], 'bid': ['bidClsfNo', 'bidPbancItemSqno'], 'contract': ['ctrtItemSqno']}
+WRITE = {'mvp.apply', 'mvp.edit', 'mvp.trash', 'mvp.restore', 'mvp.settings.save'}
+CONTRACT_USER_DEFAULTS = {'종결': False, '지정일': '', '종결금액': '', '선금보증기한': '', '선금보증금액': ''}
+DERIVED_USER_FIELDS = {'지체일수', '미종결금액'}
+
+def identity_text(value):
+    if isinstance(value, bool):
+        return 'true' if value else 'false'
+    return str(value) if isinstance(value, (str, int)) else None
+
+def belongs_to(row, stage, identity):
+    return all(k not in row or absent(row[k]) or identity_text(row[k]) == value for k, value in zip(IDENTITIES[stage], identity))
+
+def default_user_values(stage):
+    return copy.deepcopy(CONTRACT_USER_DEFAULTS) if stage == 'contract' else {}
+
+def valid_user_column_keys(keys):
+    return isinstance(keys, list) and len(keys) <= 500 and all(isinstance(key, str) and key.strip() for key in keys) and len(set(keys)) == len(keys)
+
+def default_settings():
+    return {'theme': 'light', 'extractionMode': 'tables', 'hideEmptyColumns': True, 'hideUnmappedColumns': False, 'hideEmptyTables': False,
+            'dictionary': {'keys': DEFAULTS['KEY_LABELS'], 'values': DEFAULTS['CODE_SEED']}, 'launchers': [],
+            'shortcuts': {'collect': 'Alt+Shift+S', 'document': 'Alt+Shift+D'}, 'columnTypes': {}, 'columnLocks': {}, 'userColumns': {}}
+
+def same(left, right):
+    return dumps(left) == dumps(right)  # SQLite/Python bool != integer zero.
+
+def absent(value):
+    return empty(value) or value == [] or value == {}
+
+def record_id(observation):
+    return observation['stage'] + ':' + digest(observation['identity'])[:32]
+
+def valid_screen_rules(rules):
+    return (isinstance(rules, list) and len(rules) <= 500 and all(
+        isinstance(rule, dict) and rule.get('stage') in IDENTITIES
+        and all(isinstance(rule.get(key), str) and rule[key].strip() for key in ('id', 'urlPattern', 'areaCd', 'depth1', 'depth2'))
+        and ('depth3' not in rule or isinstance(rule['depth3'], str)) for rule in rules)
+        and len({rule['id'] for rule in rules}) == len(rules))
+
+
+def screen_rule_matches(rule, source):
+    pattern = rule['urlPattern']
+    url_matches = (re.fullmatch('.*'.join(re.escape(part) for part in pattern.split('*')), source['url'], re.DOTALL) is not None
+                   if '*' in pattern else source['url'].startswith(pattern))
+    return (url_matches and all(source.get(key) == rule[key] for key in ('areaCd', 'depth1', 'depth2'))
+            and (not rule.get('depth3', '').strip() or source.get('depth3') == rule['depth3']))
+
+
+def validate_observation(observation, screen_rules=None):
+    require(isinstance(observation, dict), '수집 자료가 객체여야 합니다.')
+    stage = observation.get('stage')
+    require(stage in IDENTITIES, '지원하지 않는 업무입니다.')
+    identity = observation.get('identity')
+    require(isinstance(identity, list) and len(identity) == 2 and all(isinstance(s, str) and s.strip() for s in identity), '업무번호와 차수가 필요합니다.')
+    fields = observation.get('fields')
+    require(isinstance(fields, dict) and all(isinstance(k, str) for k in fields), '원천 열을 확인하세요.')
+    require(all(identity_text(fields.get(k)) == v for k, v in zip(IDENTITIES[stage], identity)), '업무키와 원천 필드가 다릅니다.')
+    source = observation.get('source', {})
+    require(isinstance(source, dict) and isinstance(source.get('url'), str), '프레임 출처 형식을 확인하세요.', 'SCREEN')
+    locator = urlparse(source['url']); host = locator.hostname or ''
+    depth1, depth2 = SCREENS[stage]
+    require(locator.scheme in ('http', 'https') and (host == 'g2b.go.kr' or host.endswith('.g2b.go.kr')), '등록된 나라장터 URL에서만 수집합니다.', 'SCREEN')
+    if screen_rules is None:
+        require(source.get('areaCd') == '14' and source.get('depth1') == depth1 and source.get('depth2') in depth2, '등록된 화면 코드에서만 수집합니다.', 'SCREEN')
+        if source.get('depth3') and stage in ('bid', 'contract'):
+            require(source['depth3'] in ({'01175', '01179'} if stage == 'bid' else {'01572', '01579'}), '등록되지 않은 하위 화면입니다.', 'SCREEN')
+    else:
+        matches = {rule['stage'] for rule in screen_rules if screen_rule_matches(rule, source)}
+        require(matches == {stage}, '등록된 수집 화면 규칙이 일치하지 않거나 업무가 모호합니다.', 'SCREEN')
+    require(isinstance(source.get('framePath'), str), '프레임 출처가 필요합니다.')
+    raw = observation.get('rawJson')
+    require(isinstance(raw, str) and len(raw.encode('utf-8')) <= 48 * 1024 * 1024, '원본 JSON 크기/형식을 확인하세요.')
+    try:
+        origin = loads(raw)
+    except (ValueError, TypeError):
+        raise Fault('VALIDATION', '원본 JSON을 읽을 수 없습니다.')
+    require(isinstance(origin, dict), '원본 JSON이 객체여야 합니다.')
+    point = origin.get('pointInfo', {})
+    require(isinstance(point, dict) and all(point.get(k) == source.get(k) for k in ['areaCd', 'depth1', 'depth2']), '원본과 화면 조건이 다릅니다.', 'SCREEN')
+    require(not source.get('depth3') or point.get('depth3') == source['depth3'], '원본 하위 화면 코드가 다릅니다.', 'SCREEN')
+    require('url' not in origin or origin['url'] == source['url'], '원본 프레임 URL이 다릅니다.', 'SCREEN')
+    require('framePath' not in origin or origin['framePath'] == source['framePath'], '원본 프레임 경로가 다릅니다.', 'SCREEN')
+    require(not origin.get('warnings'), '읽기 오류가 있는 원본은 수집하지 않습니다.', 'SCREEN')
+    tables = origin.get('tables')
+    require(isinstance(tables, dict) and all(isinstance(k, str) and isinstance(rows, list) and all(isinstance(row, dict) for row in rows) for k, rows in tables.items()), '원본 표 형식을 확인하세요.')
+    source_rows = [point, *(row for rows in tables.values() for row in rows)]
+    relevant = [row for row in source_rows if belongs_to(row, stage, identity)]
+    require(any(all(k in row and identity_text(row[k]) == value for k, value in zip(IDENTITIES[stage], identity)) for row in relevant), '원본에 완전한 업무키가 없습니다.')
+    require(all(any(field in row and same(row[field], value) for row in relevant) for field, value in fields.items()), '원천 열/값이 해당 업무의 원본 JSON과 다릅니다.')
+    children = observation.get('children')
+    require(isinstance(children, list) and len(children) <= 500, '하위 표 형식을 확인하세요.')
+    seen = set()
+    for child in children:
+        require(isinstance(child, dict) and isinstance(child.get('key'), str) and child['key'] not in seen, '하위 표 키가 중복되었습니다.')
+        seen.add(child['key'])
+        require(child.get('kind') in ('items', 'qualification', 'other') and isinstance(child.get('label'), str), '하위 표 분류를 확인하세요.')
+        require(isinstance(child.get('rows'), list) and all(isinstance(row, dict) for row in child['rows']), '하위 표 행을 확인하세요.')
+        require(child['key'] in tables and all(belongs_to(row, stage, identity) and any(same(row, source_row) for source_row in tables[child['key']]) for row in child['rows']), '하위 표가 해당 업무의 원본 JSON과 다릅니다.')
+    require(isinstance(observation.get('capturedAt'), str), '수집 시각이 필요합니다.')
+    return observation
+
+def merge_fields(previous, incoming, prefix, rid, conflicts, decisions):
+    merged = copy.deepcopy(previous)
+    for field, value in incoming.items():
+        if field not in merged or absent(merged[field]):
+            if not absent(value) or field not in merged:
+                merged[field] = copy.deepcopy(value)
+        elif absent(value) or same(merged[field], value):
+            continue
+        else:
+            path = field if not prefix else dumps([*prefix, field])
+            conflicts.append({'recordId': rid, 'field': path, 'previous': merged[field], 'incoming': value})
+            if decisions.get((rid, path), False):
+                merged[field] = copy.deepcopy(value)
+    return merged
+
+def merge_children(previous, incoming, stage, rid, conflicts, decisions):
+    merged = copy.deepcopy(previous)
+    for child in incoming:
+        old = next((c for c in merged if c['key'] == child['key']), None)
+        if old is None:
+            merged.append(copy.deepcopy(child)); continue
+        if not child['rows']:
+            continue
+        keys = ITEM_KEYS[stage] if child['kind'] == 'items' else []
+        for row in child['rows']:
+            if keys and all(not absent(row.get(k)) for k in keys):
+                matches = [(index, candidate) for index, candidate in enumerate(old['rows']) if all(same(candidate.get(k), row[k]) for k in keys)]
+                require(len(matches) <= 1, '기존 하위 표의 물품키가 중복되어 비교할 수 없습니다.', 'AMBIGUOUS')
+                if matches:
+                    index, candidate = matches[0]
+                    old['rows'][index] = merge_fields(candidate, row, ['children', child['key'], index], rid, conflicts, decisions)
+                else:
+                    old['rows'].append(copy.deepcopy(row))
+            elif not any(same(candidate, row) for candidate in old['rows']):
+                old['rows'].append(copy.deepcopy(row))
+    return merged
+
+class MvpGateway:
+    def __init__(self, filename):
+        from pathlib import Path
+        Path(filename).parent.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(filename, isolation_level=None, check_same_thread=False)
+        self.db.execute('PRAGMA foreign_keys=ON')
+        self.db.execute('PRAGMA busy_timeout=5000')
+        self.db.execute('PRAGMA journal_mode=WAL')
+        self.lock = threading.RLock()
+        self.db.executescript('''
+            CREATE TABLE IF NOT EXISTS mvp_records (record_id TEXT PRIMARY KEY, stage TEXT NOT NULL, store_version INTEGER NOT NULL, payload TEXT NOT NULL, deleted_at TEXT);
+            CREATE TABLE IF NOT EXISTS mvp_settings (singleton INTEGER PRIMARY KEY CHECK(singleton=1), store_version INTEGER NOT NULL, payload TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS mvp_requests (request_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, response TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS mvp_stage ON mvp_records(stage);
+        ''')
+        if 'deleted_at' not in {row[1] for row in self.db.execute('PRAGMA table_info(mvp_records)')}:
+            self.db.execute('ALTER TABLE mvp_records ADD COLUMN deleted_at TEXT')
+        self.db.execute('INSERT OR IGNORE INTO mvp_settings VALUES(1,1,?)', (dumps(default_settings()),))
+
+    def close(self):
+        self.db.close()
+
+    def get(self, rid):
+        row = self.db.execute('SELECT payload FROM mvp_records WHERE record_id=?', (rid,)).fetchone()
+        return loads(row[0]) if row else None
+
+    def save(self, record):
+        self.db.execute('INSERT INTO mvp_records(record_id,stage,store_version,payload,deleted_at) VALUES(?,?,?,?,?) ON CONFLICT(record_id) DO UPDATE SET store_version=excluded.store_version,payload=excluded.payload,deleted_at=excluded.deleted_at',
+                        (record['recordId'], record['stage'], record['storeVersion'], dumps(record), record.get('deletedAt')))
+
+    def compare(self, observations, decisions=None):
+        require(isinstance(observations, list) and 0 < len(observations) <= 20000, '수집 대상이 없거나 너무 많습니다.')
+        decisions = decisions or {}
+        conflicts, records, versions, seen = [], [], [], set()
+        counts = {'inserted': 0, 'identical': 0, 'supplemented': 0, 'changed': 0}
+        settings = loads(self.db.execute('SELECT payload FROM mvp_settings WHERE singleton=1').fetchone()[0])
+        for observation in observations:
+            validate_observation(observation, settings.get('screenRules'))
+            rid = record_id(observation)
+            require(rid not in seen, '한 요청에 같은 업무키가 여러 번 있습니다.', 'AMBIGUOUS')
+            seen.add(rid)
+            previous = self.get(rid)
+            require(previous is None or not previous.get('deletedAt'), '휴지통의 자료입니다. 먼저 복원한 뒤 수집하세요.', 'TRASHED')
+            versions.append((rid, previous['storeVersion'] if previous else None))
+            if previous is None:
+                records.append({**copy.deepcopy(observation), 'recordId': rid, 'storeVersion': 1, 'userValues': default_user_values(observation['stage'])})
+                counts['inserted'] += 1; continue
+            before_conflicts = len(conflicts)
+            fields = merge_fields(previous['fields'], observation['fields'], [], rid, conflicts, decisions)
+            children = merge_children(previous['children'], observation['children'], observation['stage'], rid, conflicts, decisions)
+            changed = not same(fields, previous['fields']) or not same(children, previous['children'])
+            counts['changed' if len(conflicts) > before_conflicts else 'supplemented' if changed else 'identical'] += 1
+            records.append({**previous, **({'fields': fields, 'children': children, 'rawJson': observation['rawJson'], 'source': observation['source'], 'capturedAt': observation['capturedAt'], 'storeVersion': previous['storeVersion'] + 1} if changed else {})})
+        return {'token': digest({'observations': observations, 'versions': versions}), 'observations': observations, 'conflicts': conflicts, 'counts': counts}, records
+
+    def dispatch(self, command, payload):
+        if command == 'mvp.health':
+            return {'connected': True, 'storage': 'SQLite', 'protocolVersion': 1}
+        if command == 'mvp.records':
+            require(payload.get('stage') in IDENTITIES, '업무 종류를 확인하세요.')
+            require('trashed' not in payload or type(payload['trashed']) is bool, '휴지통 조회는 체크값이어야 합니다.')
+            query = 'SELECT payload FROM mvp_records WHERE stage=? AND deleted_at IS ' + ('NOT NULL' if payload.get('trashed', False) else 'NULL') + ' ORDER BY record_id'
+            return [loads(row[0]) for row in self.db.execute(query, (payload['stage'],))]
+        if command in ('mvp.trash', 'mvp.restore'):
+            changes = payload.get('records')
+            require(isinstance(changes, list) and 0 < len(changes) <= 20000, '이동할 행이 없거나 너무 많습니다.')
+            require(all(isinstance(change, dict) and isinstance(change.get('recordId'), str) and type(change.get('storeVersion')) is int for change in changes), '행 번호와 저장 버전을 확인하세요.')
+            require(len({change['recordId'] for change in changes}) == len(changes), '이동할 행이 중복되었습니다.')
+            timestamp = datetime.now(timezone.utc).isoformat()
+            for change in changes:
+                previous = self.get(change['recordId'])
+                require(previous is not None, '이동할 자료가 없습니다.')
+                require(previous['storeVersion'] == change['storeVersion'], '자료가 다른 창에서 바뀌었습니다. 다시 조회하세요.', 'STALE')
+                require(bool(previous.get('deletedAt')) == (command == 'mvp.restore'), '자료의 휴지통 상태가 바뀌었습니다. 다시 조회하세요.', 'STALE')
+                record = {**previous, 'storeVersion': previous['storeVersion'] + 1}
+                if command == 'mvp.trash':
+                    record['deletedAt'] = timestamp
+                else:
+                    record.pop('deletedAt', None)
+                self.save(record)
+            return {'count': len(changes)}
+        if command == 'mvp.preview':
+            return self.compare(payload.get('observations'))[0]
+        if command == 'mvp.apply':
+            choices = payload.get('decisions', [])
+            require(isinstance(choices, list) and all(isinstance(c, dict) and isinstance(c.get('recordId'), str) and isinstance(c.get('field'), str) and isinstance(c.get('useIncoming'), bool) for c in choices), '충돌 선택 형식을 확인하세요.')
+            decisions = {(c['recordId'], c['field']): c['useIncoming'] for c in choices}
+            require(len(decisions) == len(choices), '중복 충돌 선택입니다.')
+            preview, records = self.compare(payload.get('observations'), decisions)
+            require(payload.get('token') == preview['token'], '자료가 바뀌었습니다. 다시 비교하세요.', 'STALE')
+            expected = {(c['recordId'], c['field']) for c in preview['conflicts']}
+            require(set(decisions) == expected, '각 충돌에 유지/반영을 선택하세요.')
+            for record in records:
+                self.save(record)
+            return {'records': records, 'counts': preview['counts']}
+        if command == 'mvp.edit':
+            changes = payload.get('records')
+            column_change = payload.get('userColumns')
+            if 'userColumns' in payload:
+                require(isinstance(column_change, dict) and isinstance(column_change.get('stage'), str) and column_change['stage'] in IDENTITIES, '사용자 열의 업무를 확인하세요.')
+                require(valid_user_column_keys(column_change.get('keys')), '사용자 열 이름은 중복 없는 문자열 목록이어야 합니다.')
+                require(type(column_change.get('settingsStoreVersion')) is int, '설정 버전은 정수여야 합니다.')
+            require(isinstance(changes, list) and (changes or column_change is not None), '저장할 행이 없습니다.')
+            require(all(isinstance(c, dict) for c in changes), '수정 행이 객체여야 합니다.')
+            require(len({c.get('recordId') for c in changes if isinstance(c, dict)}) == len(changes), '수정 행이 중복되었습니다.')
+            records = []
+            settings = loads(self.db.execute('SELECT payload FROM mvp_settings WHERE singleton=1').fetchone()[0])
+            locks = settings.get('columnLocks', {})
+            for change in changes:
+                previous = self.get(change.get('recordId', ''))
+                require(previous is not None, '수정할 자료가 없습니다.')
+                require(not previous.get('deletedAt'), '휴지통 자료는 먼저 복원하세요.', 'TRASHED')
+                require(column_change is None or previous['stage'] == column_change['stage'], '다른 업무의 행과 사용자 열을 함께 저장할 수 없습니다.')
+                require(type(change.get('storeVersion')) is int and change['storeVersion'] == previous['storeVersion'], '다른 창에서 수정되었습니다. 입력을 유지하고 재조회하세요.', 'STALE')
+                fields, user = change.get('fields'), change.get('userValues')
+                require(isinstance(fields, dict) and isinstance(user, dict), '수정 열을 확인하세요.')
+                require(set(fields) == set(previous['fields']), '원천 열의 추가/삭제는 허용하지 않습니다.')
+                require(all(same(fields.get(k), previous['fields'].get(k)) for k in IDENTITIES[previous['stage']]), '업무키는 수정할 수 없습니다.')
+                require(not DERIVED_USER_FIELDS.intersection(user), '계산 열은 저장하지 않습니다.')
+                if previous['stage'] == 'contract':
+                    require(isinstance(user.get('종결', False), bool), '종결은 체크값이어야 합니다.')
+                    require(all(isinstance(user.get(k, ''), str) for k in ('지정일', '선금보증기한')), '사용자 날짜는 원래 입력 문자열로 저장합니다.')
+                    require(all(isinstance(user.get(k, ''), (str, int)) and not isinstance(user.get(k, ''), bool) for k in ('종결금액', '선금보증금액')), '사용자 금액은 정확한 문자열 또는 정수여야 합니다.')
+                    user = {**default_user_values('contract'), **user}
+                else:
+                    require('종결' not in user, '종결은 계약에만 있습니다.')
+                for field, locked in locks.items():
+                    if not locked:
+                        continue
+                    require((field in fields) == (field in previous['fields']) and same(fields.get(field), previous['fields'].get(field))
+                            and (field in user) == (field in previous.get('userValues', {})) and same(user.get(field), previous.get('userValues', {}).get(field)),
+                            '잠긴 열은 수정할 수 없습니다: ' + field, 'LOCKED')
+                record = {**previous, 'fields': fields, 'userValues': user, 'storeVersion': previous['storeVersion'] + 1}
+                self.save(record); records.append(record)
+            if column_change is not None:
+                settings = loads(self.db.execute('SELECT payload FROM mvp_settings WHERE singleton=1').fetchone()[0])
+                settings['userColumns'] = {**settings.get('userColumns', {}), column_change['stage']: copy.deepcopy(column_change['keys'])}
+                cursor = self.db.execute('UPDATE mvp_settings SET store_version=store_version+1,payload=? WHERE singleton=1 AND store_version=?',
+                                         (dumps(settings), column_change['settingsStoreVersion']))
+                require(cursor.rowcount == 1, '사용자 열 설정이 다른 창에서 바뀌었습니다. 입력을 유지하고 재조회하세요.', 'STALE')
+            return records
+        if command == 'mvp.settings.read':
+            row = self.db.execute('SELECT store_version,payload FROM mvp_settings').fetchone()
+            return {'storeVersion': row[0], 'settings': loads(row[1])}
+        if command == 'mvp.settings.save':
+            settings = payload.get('settings', {})
+            require(isinstance(settings, dict), '설정이 객체여야 합니다.')
+            require(settings.get('theme') in ('light', 'dark') and settings.get('extractionMode') in ('tables', 'all'), '표시 설정을 확인하세요.')
+            require(all(isinstance(settings.get(k), bool) for k in ('hideEmptyColumns', 'hideUnmappedColumns')), '숨김 설정은 체크값이어야 합니다.')
+            require('hideEmptyTables' not in settings or type(settings['hideEmptyTables']) is bool, '빈 표 숨김은 체크값이어야 합니다.')
+            dictionary = settings.get('dictionary', {})
+            require(isinstance(dictionary, dict), '키/값 사전이 객체여야 합니다.')
+            require(isinstance(dictionary.get('keys'), dict) and all(isinstance(v, str) for v in dictionary['keys'].values()), '키 사전을 확인하세요.')
+            require(isinstance(dictionary.get('values'), dict) and all(isinstance(v, dict) and all(isinstance(t, str) for t in v.values()) for v in dictionary['values'].values()), '값 사전을 확인하세요.')
+            require(isinstance(settings.get('launchers'), list) and all(isinstance(c, dict) and all(isinstance(c.get(k), str) for k in ('id', 'label', 'script')) for c in settings['launchers']), '런처를 확인하세요.')
+            require(isinstance(settings.get('columnTypes', {}), dict) and all(v in ('text', 'money', 'date') for v in settings.get('columnTypes', {}).values()), '열 타입을 확인하세요.')
+            require(isinstance(settings.get('columnLocks', {}), dict) and all(isinstance(key, str) and type(value) is bool for key, value in settings.get('columnLocks', {}).items()), '열 잠금은 체크값 목록이어야 합니다.')
+            require('screenRules' not in settings or valid_screen_rules(settings['screenRules']), '수집 화면 규칙을 확인하세요.')
+            require(isinstance(settings.get('shortcuts', {}), dict) and all(k in ('extract', 'collect', 'db', 'document', 'launcher') and isinstance(v, str) for k, v in settings.get('shortcuts', {}).items()), '단축키를 확인하세요.')
+            require(isinstance(settings.get('userColumns', {}), dict) and all(stage in IDENTITIES and valid_user_column_keys(columns) for stage, columns in settings.get('userColumns', {}).items()), '사용자 열 설정을 확인하세요.')
+            require(all(key not in settings or isinstance(settings[key], str) and settings[key].strip() for key in ('contractEndField', 'contractAmountField')), '계약 계산 기준 열을 확인하세요.')
+            require(type(payload.get('storeVersion')) is int, '설정 버전은 정수여야 합니다.')
+            cursor = self.db.execute('UPDATE mvp_settings SET store_version=store_version+1,payload=? WHERE singleton=1 AND store_version=?', (dumps(settings), payload.get('storeVersion')))
+            require(cursor.rowcount == 1, '설정이 다른 창에서 바뀌었습니다. 다시 여세요.', 'STALE')
+            return self.dispatch('mvp.settings.read', {})
+        raise Fault('COMMAND', '등록되지 않은 명령입니다.')
+
+    def handle(self, request):
+        rid = request.get('requestId', '') if isinstance(request, dict) else ''
+        response = {'protocolVersion': 1, 'requestId': rid}
+        try:
+            require(isinstance(request, dict) and type(request.get('protocolVersion')) is int and request['protocolVersion'] == 1 and isinstance(rid, str) and 0 < len(rid) <= 200, '요청 버전/번호를 확인하세요.')
+            command, payload = request.get('command'), request.get('payload')
+            require(isinstance(command, str) and isinstance(payload, dict), '명령/본문 형식을 확인하세요.')
+            with self.lock:
+                fingerprint = digest(request)
+                cached = self.db.execute('SELECT fingerprint,response FROM mvp_requests WHERE request_id=?', (rid,)).fetchone()
+                if cached:
+                    require(cached[0] == fingerprint, '같은 요청 번호에 다른 내용이 들어왔습니다.', 'REQUEST_ID')
+                    return loads(cached[1])
+                self.db.execute('BEGIN IMMEDIATE' if command in WRITE else 'BEGIN')
+                try:
+                    response['result'] = self.dispatch(command, payload)
+                    if command in WRITE:
+                        self.db.execute('INSERT INTO mvp_requests VALUES(?,?,?)', (rid, fingerprint, dumps(response)))
+                    self.db.execute('COMMIT')
+                except Exception:
+                    self.db.execute('ROLLBACK'); raise
+        except Fault as error:
+            response['error'] = {'code': error.code, 'message': str(error)}
+        except (TypeError, ValueError, KeyError, sqlite3.Error) as error:
+            response['error'] = {'code': 'VALIDATION', 'message': str(error)}
+        return response

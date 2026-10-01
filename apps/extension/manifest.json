@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "PCE 업무 도우미",
+  "description": "로컬 PCE DB와 현재 화면의 수집·추출·업무 명령을 연결합니다.",
+  "version": "0.4.0",
+  "minimum_chrome_version": "138",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "nativeMessaging",
+    "alarms",
+    "userScripts"
+  ],
+  "host_permissions": [
+    "https://*.g2b.go.kr/*",
+    "http://*.g2b.go.kr/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "PCE 업무 위젯 열기 · 닫기"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "feature.html",
+        "assets/*"
+      ],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ]
+    }
+  ]
+}

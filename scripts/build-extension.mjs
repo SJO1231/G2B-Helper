@@ -1,0 +1,10 @@
+import {build} from 'esbuild';
+import {mkdir,copyFile,readFile,writeFile} from 'node:fs/promises';
+await mkdir('dist/extension',{recursive:true});
+await build({entryPoints:['apps/extension/background.ts'],outfile:'dist/extension/background.js',bundle:true,format:'esm',target:'chrome138',platform:'browser',minify:true});
+const widget=await build({entryPoints:['apps/extension/widget.ts'],outfile:'dist/extension/widget.js',bundle:true,format:'iife',target:'chrome138',platform:'browser',minify:true,metafile:true});
+await copyFile('apps/extension/manifest.json','dist/extension/manifest.json');
+const licenses=[['React','react/LICENSE'],['React DOM','react-dom/LICENSE'],['Tabulator','tabulator-tables/LICENSE'],['Decimal.js','decimal.js/LICENCE.md'],['SheetJS CE','xlsx/LICENSE'],['fflate','fflate/LICENSE']];
+const notices=await Promise.all(licenses.map(async([name,file])=>name+'\n\n'+await readFile('node_modules/'+file,'utf8')));
+await writeFile('dist/extension/THIRD_PARTY_NOTICES.txt',notices.join('\n\n------------------------------------\n\n'));
+console.log('Built Chrome extension: page widget + in-page feature panels + Native SQLite.');
