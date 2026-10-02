@@ -71,16 +71,23 @@ function timeParts(text: string): { date: [string, string, string]; time: string
 export function compareValues(a: unknown, b: unknown, type?: MvpColumnType): number {
   const left = rawText(a), right = rawText(b);
   if (['number', 'money', 'percent'].includes(type || '')) {
-    const x = numericText(left.replace(/%$/, '')), y = numericText(right.replace(/%$/, ''));
+    const x = typeof a === 'number' && Number.isFinite(a) ? left : numericText(left.replace(/%$/, ''));
+    const y = typeof b === 'number' && Number.isFinite(b) ? right : numericText(right.replace(/%$/, ''));
     if (x !== undefined && y !== undefined) return new Decimal(x).cmp(y);
+    if (x !== undefined || y !== undefined) return x === undefined ? 1 : -1;
+    return left.localeCompare(right, undefined, { numeric: true });
   }
   if (type === 'date') {
     const x = dateParts(left), y = dateParts(right);
     if (x && y) return x.join('').localeCompare(y.join(''));
+    if (x || y) return x ? -1 : 1;
+    return left.localeCompare(right, undefined, { numeric: true });
   }
   if (type === 'datetime') {
     const x = timeParts(left), y = timeParts(right);
     if (x && y) return (x.date.join('') + x.time.slice(0, 8)).localeCompare(y.date.join('') + y.time.slice(0, 8)) || new Decimal('0' + x.time.slice(8)).cmp('0' + y.time.slice(8));
+    if (x || y) return x ? -1 : 1;
+    return left.localeCompare(right, undefined, { numeric: true });
   }
   return typeof a === 'number' && typeof b === 'number' ? a - b : left.localeCompare(right, undefined, { numeric: true });
 }
@@ -127,6 +134,7 @@ export function editedValue(text: string, previous: unknown, type?: MvpColumnTyp
 
 /** Excel numbers have only 15 significant digits; identifiers and precise decimals stay text. */
 export function excelValue(value: unknown, type?: MvpColumnType): unknown {
+  if (value !== null && typeof value === 'object') return rawText(value);
   if (!['number', 'money', 'percent'].includes(type || '') || typeof value !== 'string') return value;
   const text = numericText(value.replace(/%$/, ''));
   if (text === undefined || /^[+-]?0\d/.test(text) || text.replace(/[^\d]/g, '').replace(/^0+/, '').length > 15) return value;

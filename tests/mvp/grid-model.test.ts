@@ -4,8 +4,21 @@ import { GridModel, compareValues, dateParts, editedValue, excelFormat, excelVal
 
 const settings: MvpSettings = { theme: 'light', extractionMode: 'tables', hideEmptyColumns: true, hideUnmappedColumns: false, dictionary: { keys: {}, values: {} }, launchers: [] };
 describe('MVP worksheet model (synthetic data)', () => {
+  it.each([
+    ['number', ['-10', '-2', '-3원']], ['money', ['-10', '-2', '-3원']], ['percent', ['-10%', '-2%', '-3원']],
+    ['date', ['20260101', '2026.01.20', '2026.02.30']],
+    ['datetime', ['20260101 00:00', '2026.01.20 00:00', '2026.02.30 00:00']],
+  ] as const)('orders mixed %s values consistently in every input permutation', (type, expected) => {
+    for (let first = 0; first < 3; first++) for (let second = 0; second < 3; second++) {
+      if (first === second) continue;
+      const input = [expected[first], expected[second], expected[3 - first - second]];
+      expect(input.sort((a, b) => compareValues(a, b, type))).toEqual(expected);
+    }
+    expect(compareValues(expected[0], expected[2], type)).toBeLessThan(0);
+  });
   it('sorts exact numeric strings and mixed valid dates without rounding through Number', () => {
     expect(['1.2', '-2', '1.02', '-10'].sort((a, b) => compareValues(a, b, 'money'))).toEqual(['-10', '-2', '1.02', '1.2']);
+    expect([0.1, 1e-7, -1e-7, 1e22, 2e21, '0.01', 'unknown'].sort((a, b) => compareValues(a, b, 'number'))).toEqual([-1e-7, 1e-7, '0.01', 0.1, 2e21, 1e22, 'unknown']);
     expect(compareValues('12345678901234567890.0000000001', '12345678901234567890.0000000002', 'number')).toBe(-1);
     expect(['2026-02-01', '20260101', '2026.01.20'].sort((a, b) => compareValues(a, b, 'date'))).toEqual(['20260101', '2026.01.20', '2026-02-01']);
     expect(dateParts('0001-01-01')).toEqual(['0001', '01', '01']); expect(dateParts('2024-02.29')).toBeUndefined();

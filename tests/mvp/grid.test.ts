@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MvpSettings } from '../../apps/mvp/contracts';
+import * as XLSX from 'xlsx';
 
 const state = vi.hoisted(() => ({ tables: [] as any[], files: [] as any[] }));
 vi.mock('xlsx', async importOriginal => ({ ...await importOriginal<any>(), writeFile: (book: unknown, name: string) => state.files.push({ book, name }) }));
@@ -81,6 +82,16 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
+  it('retains nested objects and arrays as JSON in the written Excel file', () => {
+    const source = [{ items: [{ code: '0001', amount: '12345678901234567890.123456789', quantity: 0, flag: false }], meta: JSON.parse('{"__proto__":false,"text":"한글\\n상세"}') }, { items: [], meta: {} }];
+    const handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '중첩 내보내기', rows: source, settings });
+    state.tables[0].fire('tableBuilt'); handle.exportExcel('중첩'); handle.exportCsv('중첩');
+    const book = XLSX.read(XLSX.write(state.files[0].book, { type: 'array', bookType: 'xlsx' }), { type: 'array' });
+    const sheet = book.Sheets[book.SheetNames[0]], csv = state.files[1].book.Sheets['자료'];
+    expect(XLSX.utils.sheet_to_json(sheet, { header: 1 })).toEqual([['items', 'meta'], ...source.map(row => [JSON.stringify(row.items), JSON.stringify(row.meta)])]);
+    expect(sheet.A2.v).toBe(csv.A2.v); expect(sheet.B2.v).toBe(csv.B2.v);
+    expect(handle.rows()).toEqual(source); handle.destroy();
+  });
   it('undoes a paste batch and recalculates derived cells outside history', () => {
     const parent = new FakeElement(); let handle: ReturnType<typeof renderGrid>;
     handle = renderGrid(parent as unknown as HTMLElement, { label: '실행 취소', rows: [{ amount: '100', total: '200' }], settings, readOnlyColumnKeys: ['total'], onRowsChanged: () => handle.updateDerivedValues(row => ({ total: String(Number(row.amount) * 2) })) });

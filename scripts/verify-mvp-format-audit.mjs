@@ -48,6 +48,20 @@ async function probe(id,name,kind,priority,expected,run){const item={id,name,kin
 async function sorted(title){await(await header(title)).locator('.tabulator-col-sorter').click();await expect(await header(title)).toHaveAttribute('aria-sort','ascending');return values(title);}
 
 try{
+ await probe('R01','중첩 객체·배열 Excel 왕복','bug','높음','중첩 원본을 CSV와 동일한 JSON 문자열로 보존',async item=>{
+  const rows=[{items:[{code:'0001',amount:'12345678901234567890.123456789',quantity:0,flag:false}],meta:JSON.parse('{"__proto__":false,"text":"한글\\n상세"}')},{items:[],meta:{}}];await reset({'중첩 내보내기':rows});
+  const excel=XLSX.read(await download('Excel','review-nested.xlsx'),{type:'buffer'}),csv=XLSX.read((await download('CSV','review-nested.csv')).toString('utf8').replace(/^\uFEFF/,''),{type:'string',raw:true});
+  item.observed.excel=XLSX.utils.sheet_to_json(excel.Sheets[excel.SheetNames[0]],{header:1});item.observed.csv=XLSX.utils.sheet_to_json(csv.Sheets[csv.SheetNames[0]],{header:1});
+  assert.deepEqual(item.observed.excel,[['items','meta'],...rows.map(row=>[JSON.stringify(row.items),JSON.stringify(row.meta)])]);assert.deepEqual(item.observed.excel,item.observed.csv);
+  const original=JSON.parse((await download('JSON','review-nested.json')).toString('utf8'));assert.deepEqual(original.tables['중첩 내보내기'],rows);
+ });
+ await probe('R02','해석 불가 값과 혼합 정렬','bug','중간','5종 타입의 정상 값 우선 정렬과 원본 보존',async item=>{
+  item.observed.orders={};for(const [type,label,ordered]of [['number','숫자',[-1e-7,1e-7,'0.01',0.1,2e21,1e22,'unknown']],['money','금액',['-10','-2','-3원']],['percent','백분율',['-10%','-2%','-3원']],['date','날짜',['20260101','2026.01.20','2026.02.30']],['datetime','날짜·시간',['20260101 00:00','2026.01.20 00:00','2026.02.30 00:00']]]){
+   const rows=[...ordered.slice(1),ordered[0]].map(value=>({값:value}));await reset({'혼합':rows});await setType('값',label);await grid().evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+   item.observed.orders[type]=(await sorted('값')).slice(0,ordered.length);assert.deepEqual(item.observed.orders[type],ordered.map(value=>model.formatValue(value,type)));
+   const original=JSON.parse((await download('JSON','review-mixed-'+type+'.json')).toString('utf8'));assert.deepEqual(original.tables['혼합'],rows);
+  }
+ });
  await probe('F01','열 타입 범위','gap','중간','문자·숫자·금액·백분율·날짜·날짜시간·체크박스',async item=>{
   await reset({'타입':[{ctrtAmt:'1234',dlvgdsTermYmd:'20261002'}]});await(await header('계약금액')).click({button:'right'});await grid().locator('.tabulator-menu').getByText('열 타입',{exact:true}).click();for(const label of ['텍스트','숫자','금액','백분율','날짜','날짜·시간','체크값'])await expect(grid().getByText(label,{exact:true})).toBeVisible();item.observed.options=await grid().locator('.tabulator-menu').allTextContents();
  });
