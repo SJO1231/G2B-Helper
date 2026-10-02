@@ -109,7 +109,7 @@ python -m unittest discover -s native/tests -v
 
 ## GitHub Actions 최소 CI (2026-10-02)
 
-`.github/workflows/ci.yml`은 모든 브랜치의 push와 PR에서 Ubuntu 24.04, Node.js 24로 `npm ci`와 기존 `npm run verify`를 실행한다. 설치와 verify는 별도 step이다. verify 안의 경계 검사·확장 경계 검사·타입 검사·Vitest·빌드는 기존 package.json 순서와 실패 기준을 그대로 따른다. 첫 실패 명령은 npm 로그에서 확인한다.
+`.github/workflows/ci.yml`은 모든 브랜치의 push와 PR에서 Ubuntu 24.04, Node.js 24로 `npm ci` → `npx playwright install --with-deps chromium` → 기존 `npm run verify`를 실행한다. 의존성 설치·브라우저 준비·verify는 별도 step이다. verify 안의 경계 검사·확장 경계 검사·타입 검사·Vitest·빌드는 기존 package.json 순서와 실패 기준을 그대로 따른다. 첫 실패 명령은 npm 로그에서 확인한다.
 
 이 CI는 `verify:mvp`, Python Native Host 시험, Windows EXE 패키징, 실제 Chrome/Edge 확장 설치·Native Messaging·나라장터 연결의 수용 통과를 뜻하지 않는다. 제품 코드, fixture, 테스트 선택과 기대값은 변경하지 않는다.
 
@@ -117,7 +117,7 @@ python -m unittest discover -s native/tests -v
 
 | 검사 | 현재 실행 조건 | 이번 처리 |
 | --- | --- | --- |
-| `npm run verify` | Node 의존성, 기존 lockfile. Python·레지스트리·실제 브라우저 불필요 | 기본 Ubuntu CI |
+| `npm run verify` | Node 의존성, 기존 lockfile, 위젯 합성 통신 시험용 Playwright Chromium. Python·레지스트리 불필요 | 기본 Ubuntu CI |
 | Native Python 회귀·EXE 패키징 | Windows `.venv/Scripts/python.exe`, PyInstaller, 기존 빌드 경로. 공정 하네스는 `E:/Prodev/G2B_Helper` 등 로컬 절대 경로 사용 | 로컬 수용시험; 현재 runner에서 재현 성공을 확인하지 않음 |
 | `test:extension:ui` | `.venv/Scripts/python.exe`, Edge. Native Host에 직접 stdio 연결, Chrome API는 하네스 | 로컬 보조 검증; 실제 Native Messaging 통과 근거로 쓰지 않음 |
 | `test:extension:runtime` | Edge `msedge`, PowerShell/HKCU 임시 등록, `dist/desktop-v4/PCE.NativeHost/PCE.NativeHost.exe` | 로컬 Edge 연동시험; 실제 Chrome 시험과 구분 |
