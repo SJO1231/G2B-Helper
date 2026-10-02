@@ -230,9 +230,10 @@ describe('MVP widget feedback in a real browser with synthetic transport', () =>
       const start = await page.locator('.head').boundingBox();
       await page.mouse.move(start!.x + 40, start!.y + 12); await page.mouse.down(); await page.mouse.move(450, 250); await page.mouse.up();
       const before = await page.locator('.control').boundingBox();
+      const anchor = await page.getByRole('button', { name: '위젯 접기', exact: true }).boundingBox();
       await page.getByRole('button', { name: '위젯 접기', exact: true }).click();
       const collapsed = await page.locator('.circle').boundingBox();
-      expect(collapsed!.x).toBeCloseTo(before!.x); expect(collapsed!.y).toBeCloseTo(before!.y);
+      expect(collapsed!.x + collapsed!.width / 2).toBeCloseTo(anchor!.x + anchor!.width / 2); expect(collapsed!.y + collapsed!.height / 2).toBeCloseTo(anchor!.y + anchor!.height / 2);
       await page.getByRole('button', { name: '위젯 펼치기', exact: true }).click();
       const restored = await page.locator('.control').boundingBox();
       expect(restored!.x).toBeCloseTo(before!.x); expect(restored!.y).toBeCloseTo(before!.y);

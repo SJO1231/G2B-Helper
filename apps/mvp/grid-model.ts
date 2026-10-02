@@ -10,6 +10,7 @@ export const rawText = (value: unknown): string => value === undefined ? '' : va
 export const valueToken = (value: unknown): string => JSON.stringify([value === undefined ? 'missing' : value === null ? 'null' : typeof value, value]);
 export const choiceText = (value: unknown): string => value === undefined ? '(누락)' : value === null ? '(null)' : value === '' ? '(빈 셀)' : rawText(value);
 const own = (object: object, key: string): boolean => Object.prototype.hasOwnProperty.call(object, key);
+export const dateColumnKeys = (rows: JsonRow[], settings: MvpSettings): string[] => [...new Set(rows.flatMap(Object.keys))].filter(key => own(settings.columnTypes || {}, key) && ['date', 'datetime'].includes(settings.columnTypes![key]));
 
 /** Item names are a preview only; the nested value remains available unchanged. */
 export function nestedPreview(value: unknown, key: string): string {

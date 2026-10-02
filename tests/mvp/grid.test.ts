@@ -34,6 +34,8 @@ vi.mock('tabulator-tables', () => {
     getSorters() { return this.sorters; }
     setSort(sorters: any[]) { this.sorters = sorters.map(sort => ({ field: sort.column, dir: sort.dir })); }
     getColumns() { return this.columns; }
+    blockRedraw() {}
+    restoreRedraw() {}
     getColumn(field: string) { return this.columns.find(column => column.getField() === field); }
     showColumn(field: string) { this.getColumn(field).show(); }
     hideColumn(field: string) { this.getColumn(field).hide(); }
@@ -82,6 +84,39 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
+  it('moves and hides selected columns as a group and undoes both without changing raw rows', () => {
+    const parent = new FakeElement(), source = [{ code: '001', amount: '1.000000000000000001', flag: false, extra: 0 }];
+    const handle = renderGrid(parent as unknown as HTMLElement, { label: '선택 열', rows: source, settings });
+    const table = state.tables[0]; table.fire('tableBuilt');
+    table.rangeCells = [[table.getRows()[0].getCell('f1'), table.getRows()[0].getCell('f2')]];
+    const data = new Map<string, string>(), dataTransfer = { setData: (kind: string, value: string) => data.set(kind, value), getData: (kind: string) => data.get(kind) || '', effectAllowed: '', types: ['application/x-g2b-grid-column'] };
+    table.options.columns[1].titleFormatter().children[2].fire('dragstart', { dataTransfer, stopPropagation() {} });
+    table.options.columns[0].titleFormatter().fire('drop', { dataTransfer, clientX: 0, preventDefault() {}, stopPropagation() {} });
+    expect(table.getColumns().map((column: any) => column.getField())).toEqual(['f1', 'f2', 'f0', 'f3']);
+    table.options.columns[1].headerContextMenu.find((item: any) => item.label === '선택 열 숨기기').action();
+    expect(handle.getViewState().columns.filter(column => !column.visible).map(column => column.key)).toEqual(['amount', 'flag']);
+    const cancel = table.options.columns[0].headerContextMenu.find((item: any) => item.label === '열 이동·숨김 취소');
+    cancel.action(); expect(table.getColumns().every((column: any) => column.isVisible())).toBe(true);
+    cancel.action(); expect(handle.getViewState().columns.map(column => column.key)).toEqual(['code', 'amount', 'flag', 'extra']);
+    expect(handle.rows()).toEqual(source); handle.destroy();
+  });
+  it('opens key dictionary editing from the column list and toggles the same chooser', () => {
+    const parent = new FakeElement(), rename = vi.fn(), handle = renderGrid(parent as unknown as HTMLElement, { label: '열 목록', rows: [{ code: '001' }], settings, onColumnRename: rename });
+    const table = state.tables[0]; table.fire('tableBuilt'); const root = parent.children[0], toggle = root.children[0].children[0];
+    toggle.fire('click'); expect(root.children[2].hidden).toBe(false); toggle.fire('click'); expect(root.children[2].hidden).toBe(true);
+    toggle.fire('click'); root.children[2].children[1].children[3].children[0].fire('contextmenu');
+    const body = root.children[2].children[1]; body.children[1].value = '새 번호'; body.children[2].fire('click');
+    expect(rename).toHaveBeenCalledWith('code', '새 번호'); expect(handle.rows()).toEqual([{ code: '001' }]); handle.destroy();
+  });
+  it('passes selected real cells to batch value dictionaries while excluding padding and unrelated selections', () => {
+    const dictionary = vi.fn(), handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '여러 값', rows: [{ code: '001', flag: false }, { code: '002', flag: true }], settings, onValueDictionary: dictionary });
+    const table = state.tables[0]; table.fire('tableBuilt'); const rows = table.getRows();
+    table.rangeCells = [[rows[0].getCell('f1')], [rows[1].getCell('f1')], [rows[2].getCell('f1')]];
+    const menu = table.options.columns[1].contextMenu({}, rows[0].getCell('f1')); menu[0].action();
+    expect(dictionary).toHaveBeenLastCalledWith('flag', false, [{ key: 'flag', value: false }, { key: 'flag', value: true }]);
+    table.options.columns[0].contextMenu({}, rows[0].getCell('f0'))[0].action(); expect(dictionary).toHaveBeenLastCalledWith('code', '001');
+    expect(handle.rows()).toEqual([{ code: '001', flag: false }, { code: '002', flag: true }]); handle.destroy();
+  });
   it('retains nested objects and arrays as JSON in the written Excel file', () => {
     const source = [{ items: [{ code: '0001', amount: '12345678901234567890.123456789', quantity: 0, flag: false }], meta: JSON.parse('{"__proto__":false,"text":"한글\\n상세"}') }, { items: [], meta: {} }];
     const handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '중첩 내보내기', rows: source, settings });
@@ -109,14 +144,16 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     expect(excel.A1.v).toBe(csv.A1.v); expect(excel.B2.v).toBe(csv.B2.v); expect(excel['!ref']).toBe(csv['!ref']); expect(excel.A2).toMatchObject({ t: 'n', v: 1234.5 }); expect(excel.A2.z).toContain('#,##0'); expect(excel['!cols'][0].wpx).toBe(210);
     expect(handle.rows()).toEqual(source); handle.destroy();
   });
-  it('keeps whole-sheet cloning linear while building and refreshing column definitions', () => {
+  it('keeps whole-sheet cloning linear while building and refreshing column definitions', async () => {
     const source = Array.from({ length: 40 }, (_, row) => Object.fromEntries(Array.from({ length: 24 }, (_, column) => ['key' + column, column === 0 ? 0 : column === 1 ? false : `${row}:${column}`])));
     const clone = vi.spyOn(globalThis, 'structuredClone'); let handle: ReturnType<typeof renderGrid> | undefined;
     try {
       handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '넓은 표', rows: source, settings });
       expect(clone.mock.calls.length).toBeLessThan(source.length * 24 * 10);
       const table = state.tables[0]; table.fire('tableBuilt'); clone.mockClear();
+      const update = vi.spyOn(table, 'updateColumnDefinition');
       handle.setSettings({ ...settings, hideEmptyColumns: false });
+      await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(24));
       expect(clone.mock.calls.length).toBeLessThan(source.length * 24 * 10);
       expect(handle.rows()).toEqual(source);
     } finally { handle?.destroy(); clone.mockRestore(); }

@@ -1,5 +1,6 @@
 import { extractCapture } from './extractor';
 import type { MvpSettings } from './contracts';
+import { setIcon } from './icons';
 
 /** Content adapter: small page control and one nearby feature frame, never a new browser window. */
 (() => {
@@ -14,12 +15,15 @@ import type { MvpSettings } from './contracts';
  style.textContent+=`.launchers{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}.launchers>button{width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.head{background:var(--soft,#edf5f2)}.head b{color:var(--ink,#26363e)}`;
  function notice(value:unknown){const text=String(value??'').replace(/\s+/g,' ').trim();message.title=text;const brief=text.startsWith('현재 화면은 수집할 수 없습니다.')?'수집 불가 · 추출을 사용하세요.':text.replace('SQLite Gateway 연결 필요','DB 연결 필요');message.textContent=brief.length>46?brief.slice(0,43)+'…':brief;}
  function button(text:string,action:()=>unknown,label?:string){const b=document.createElement('button');b.textContent=text;b.type='button';if(label){b.title=label;b.setAttribute('aria-label',label);}b.onclick=()=>Promise.resolve().then(action).catch(e=>notice(e.message||e));return b;}
- function iconButton(kind:'collapse'|'close'|'add',action:()=>unknown,label:string){const b=button('',action,label),svg=document.createElementNS('http://www.w3.org/2000/svg','svg'),path=document.createElementNS(svg.namespaceURI,'path');svg.setAttribute('viewBox','0 0 16 16');svg.setAttribute('width','14');svg.setAttribute('height','14');svg.setAttribute('fill','none');svg.setAttribute('stroke','currentColor');svg.setAttribute('stroke-width','1.6');svg.setAttribute('stroke-linecap','round');svg.setAttribute('aria-hidden','true');svg.style.verticalAlign='middle';path.setAttribute('d',kind==='close'?'M4 4l8 8M12 4l-8 8':kind==='add'?'M3 8h10M8 3v10':'M3 8h10');svg.append(path);b.append(svg);return b;}
+ function iconButton(kind:'collapse'|'close'|'add',action:()=>unknown,label:string){const b=button('',action,label);setIcon(b,kind,label);return b;}
  function row(...nodes:HTMLElement[]){const r=document.createElement('div');r.className='row';r.append(...nodes);body.append(r);return r;}
  function place(node:HTMLElement,left:number,top:number){node.style.left=Math.max(0,Math.min(Math.max(0,innerWidth-node.offsetWidth),left))+'px';node.style.top=Math.max(0,Math.min(Math.max(0,innerHeight-node.offsetHeight),top))+'px';node.style.right='auto';}
- const circle=button('G2B',()=>{const r=circle.getBoundingClientRect();circle.hidden=true;control.hidden=false;place(control,r.left,r.top);},'위젯 펼치기');circle.className='circle';circle.hidden=true;shadow.append(circle);
+ let controlPosition={left:0,top:0};
+ const circle=button('G2B',()=>{circle.hidden=true;control.hidden=false;place(control,controlPosition.left,controlPosition.top);},'위젯 펼치기');circle.className='circle';circle.hidden=true;shadow.append(circle);
  function closePanel(){panelObserver?.disconnect();panelObserver=undefined;panel?.remove();panel=undefined;frame=undefined;popupDrag=undefined;}
- head.append(title,iconButton('collapse',()=>{const r=control.getBoundingClientRect();control.hidden=true;circle.hidden=false;place(circle,r.left,r.top);},'위젯 접기'),iconButton('close',()=>{openRevision++;closePanel();host.remove();},'위젯 닫기'));
+ const collapse=iconButton('collapse',()=>{const r=control.getBoundingClientRect(),anchor=collapse.getBoundingClientRect();controlPosition={left:r.left,top:r.top};control.hidden=true;circle.hidden=false;place(circle,anchor.left+anchor.width/2-21,anchor.top+anchor.height/2-21);},'위젯 접기');
+ head.append(title,collapse,iconButton('close',()=>{openRevision++;closePanel();host.remove();},'위젯 닫기'));
+ style.textContent+=`.head{height:34px;padding:5px 8px}.head .icon-button{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:3px}.row.counts select,.row.counts input{text-align:center;text-align-last:center;font-variant-numeric:tabular-nums}`;
  async function request(kind:string,payload:Record<string,unknown>={}){const result=await chrome.runtime.sendMessage({kind,...payload,tabId:sourceTabId});if(result?.error)throw new Error(typeof result.error==='string'?result.error:result.error.message);return result?.result;}
  async function readSettings(){const response=await request('mvp.rpc',{envelope:{protocolVersion:1,requestId:crypto.randomUUID(),command:'mvp.settings.read',payload:{}}});applySettings(response?.settings);}
  function clampPanel(){if(!panel)return;const r=panel.getBoundingClientRect();panel.style.left=Math.max(8,Math.min(r.left,Math.max(8,innerWidth-r.width-8)))+'px';panel.style.top=Math.max(8,Math.min(r.top,Math.max(8,innerHeight-r.height-8)))+'px';}

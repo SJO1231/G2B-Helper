@@ -123,7 +123,8 @@ try {
     await expect(page.locator('.tab-actions').getByRole('button', { name: '종결', exact: true })).toBeHidden();
     await expect(await cell('수량')).toHaveText('0'); await expect(await cell('완료')).toHaveText('false');
     const box = await mainGrid().boundingBox(); assert.ok(box.height >= 190);
-    await expect(page.locator('.shell > .toolbar').getByRole('button', { name: '저장', exact: true })).toBeHidden();
+    await expect(page.locator('.shell > .toolbar').getByRole('button', { name: '저장', exact: true })).toBeVisible();
+    await expect(page.locator('.shell > .toolbar').getByRole('button', { name: '저장', exact: true })).toBeDisabled();
     await screenshot('01-extract-light.png');
   });
   await check('file JSON: every source key, identifiers, decimals and an original empty row survive', async () => {
@@ -269,7 +270,7 @@ try {
     assert.equal(saved[0].ctrtNo, 'SAMPLE-001'); assert.equal(saved[23].ctrtNo, 'SAMPLE-024');
   });
   await check('date window +/-1 year selects full calendar year and reapplies the selected source date', async () => {
-    await goto('mode=db&stage=contract'); await page.getByLabel('날짜 기준').selectOption('ctrtDt'); const start = page.getByLabel('시작일'), end = page.getByLabel('종료일'), before = [await start.inputValue(), await end.inputValue()];
+    await goto('mode=db&stage=contract'); await (await header('ctrtDt')).click({button:'right'}); await mainGrid().locator('.tabulator-menu').getByText('열 타입',{exact:true}).click(); await mainGrid().getByText('날짜',{exact:true}).click(); await page.getByLabel('날짜 기준').selectOption('ctrtDt'); const start = page.getByLabel('시작일'), end = page.getByLabel('종료일'), before = [await start.inputValue(), await end.inputValue()];
     await page.getByRole('button', { name: '+1년', exact: true }).click(); await waitRows(0);
     assert.equal(Number((await start.inputValue()).slice(0, 4)), Number(before[0].slice(0, 4)) + 1); assert.equal(Number((await end.inputValue()).slice(0, 4)), Number(before[1].slice(0, 4)) + 1);
     await page.getByRole('button', { name: '−1년', exact: true }).click(); await waitRows(24);

@@ -66,3 +66,4 @@
 .mvp-grid-group-heading{display:flex;align-items:center;justify-content:space-between;gap:8px}.mvp-grid-group-heading strong{font-weight:500;color:var(--grid-muted)}
 .mvp-grid .tabulator .tabulator-range{border-color:var(--selection,var(--grid-accent))}
 .mvp-grid .tabulator .tabulator-header .tabulator-col.tabulator-range-selected{background:var(--selection-soft,var(--grid-control));color:var(--grid-ink)}
+.mvp-grid-footer{display:flex;justify-content:flex-end;align-items:center;min-height:20px;padding:2px 6px;border-top:1px solid var(--grid-line);font-size:11px;color:var(--grid-muted);flex-shrink:0}.mvp-grid-footer .mvp-grid-count{margin:0}.mvp-grid .icon-button{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;padding:4px;flex-shrink:0}

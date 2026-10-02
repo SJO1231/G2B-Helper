@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { MvpSettings } from '../../apps/mvp/contracts';
-import { GridModel, compareValues, dateParts, editedValue, excelFormat, excelValue, exportMatrix, formatValue, matchesView, nestedPreview, parseClipboard, valueToken, type GridFilter } from '../../apps/mvp/grid-model';
+import { GridModel, compareValues, dateColumnKeys, dateParts, editedValue, excelFormat, excelValue, exportMatrix, formatValue, matchesView, nestedPreview, parseClipboard, valueToken, type GridFilter } from '../../apps/mvp/grid-model';
 
 const settings: MvpSettings = { theme: 'light', extractionMode: 'tables', hideEmptyColumns: true, hideUnmappedColumns: false, dictionary: { keys: {}, values: {} }, launchers: [] };
 describe('MVP worksheet model (synthetic data)', () => {
+  it('lists only declared date and datetime columns, including empty dates and excluding date-shaped identifiers', () => {
+    const rows = [{ itemIdnfNo: '20263140', identifier: '20261002', due: '', changed: false }, { due: null, recorded: 'invalid', memo: '20261002' }];
+    expect(dateColumnKeys(rows, { ...settings, columnTypes: { due: 'date', recorded: 'datetime', identifier: 'text', changed: 'boolean', missing: 'date' } })).toEqual(['due', 'recorded']);
+    expect(dateColumnKeys(rows, settings)).toEqual([]);
+  });
   it.each([
     ['number', ['-10', '-2', '-3원']], ['money', ['-10', '-2', '-3원']], ['percent', ['-10%', '-2%', '-3원']],
     ['date', ['20260101', '2026.01.20', '2026.02.30']],

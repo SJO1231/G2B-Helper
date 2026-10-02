@@ -33,7 +33,7 @@ export interface GridRendererOptions {
   onColumnFormat?: (key: string, format: MvpColumnFormat) => void;
   onColumnLock?: (key: string, locked: boolean) => void;
   onNotice?: (message: string) => void;
-  onValueDictionary?: (key: string, value: unknown) => void;
+  onValueDictionary?: (key: string, value: unknown, selection?: { key: string; value: unknown }[]) => void;
   allowRowDelete?: boolean;
   onDeleteRows?: (rows: JsonRow[], sourceIndices: number[]) => void;
   onUserColumnsChanged?: (keys: string[]) => void;
