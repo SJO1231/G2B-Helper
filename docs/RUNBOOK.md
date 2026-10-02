@@ -106,3 +106,29 @@ python -m unittest discover -s native/tests -v
 화면과 패키지 검증은 `node scripts/verify-workspace.mjs`, `.\.venv\Scripts\python.exe scripts/verify-package.py`로 실행한다. 최신 결과와 범위는 `TEST_REPORT.md`를 참조한다. 사용자 제공 자료의 구조 검증과 실제 브라우저 권한·Native Messaging 등록·WebView2 GUI 검증은 구분한다. 실제 소스 샘플 값은 공개 픽스처나 보고서에 복사하지 않는다.
 
 네이티브 진입점 검증은 `.\.venv\Scripts\python.exe scripts/verify-desktop.py`, 배포 EXE는 같은 명령에 `--packaged`를 붙인다. 격리 DB·프로필에서 자체 화면을 열고 결과를 기록한 뒤 닫는다.
+
+## GitHub Actions 최소 CI (2026-10-02)
+
+`.github/workflows/ci.yml`은 모든 브랜치의 push와 PR에서 Ubuntu 24.04, Node.js 24로 `npm ci`와 기존 `npm run verify`를 실행한다. 설치와 verify는 별도 step이다. verify 안의 경계 검사·확장 경계 검사·타입 검사·Vitest·빌드는 기존 package.json 순서와 실패 기준을 그대로 따른다. 첫 실패 명령은 npm 로그에서 확인한다.
+
+이 CI는 `verify:mvp`, Python Native Host 시험, Windows EXE 패키징, 실제 Chrome/Edge 확장 설치·Native Messaging·나라장터 연결의 수용 통과를 뜻하지 않는다. 제품 코드, fixture, 테스트 선택과 기대값은 변경하지 않는다.
+
+### 플랫폼 검사의 실행 경계
+
+| 검사 | 현재 실행 조건 | 이번 처리 |
+| --- | --- | --- |
+| `npm run verify` | Node 의존성, 기존 lockfile. Python·레지스트리·실제 브라우저 불필요 | 기본 Ubuntu CI |
+| Native Python 회귀·EXE 패키징 | Windows `.venv/Scripts/python.exe`, PyInstaller, 기존 빌드 경로. 공정 하네스는 `E:/Prodev/G2B_Helper` 등 로컬 절대 경로 사용 | 로컬 수용시험; 현재 runner에서 재현 성공을 확인하지 않음 |
+| `test:extension:ui` | `.venv/Scripts/python.exe`, Edge. Native Host에 직접 stdio 연결, Chrome API는 하네스 | 로컬 보조 검증; 실제 Native Messaging 통과 근거로 쓰지 않음 |
+| `test:extension:runtime` | Edge `msedge`, PowerShell/HKCU 임시 등록, `dist/desktop-v4/PCE.NativeHost/PCE.NativeHost.exe` | 로컬 Edge 연동시험; 실제 Chrome 시험과 구분 |
+| MVP 서식·타입 화면 검사 | `scripts/verify-mvp-format-audit.mjs`가 로컬 Chrome 절대 경로 사용. `--require-pass`가 개별 실패를 종료 코드에 반영 | 로컬 수용시험. 보고서 생성 exit 0만으로 통과 판정하지 않음 |
+| 실제 Chrome·Native Messaging·나라장터 | 현재 MVP 빌드, 일치하는 확장 ID·allowed_origins·HKCU 등록, 허용된 브라우저 정책·사이트 접근 | 아래 로컬 수용시험으로 별도 확인 |
+
+Windows runner를 지정하는 것만으로 위 조건이 준비되거나 Chrome 연동이 검증되지는 않는다. 따라서 이번에는 신뢰성 있는 실행 근거가 없는 Windows job을 추가하지 않는다. 향후 임시 프로필·DB·호스트 등록의 준비/정리까지 재현한 후 기본 CI와 독립된 Windows job으로 옮긴다.
+
+### 로컬 수용시험
+
+1. 현재 커밋을 기록하고 `npm ci`, `npm run verify`를 실행한다. Native 회귀는 임시 DB를 사용하는 기존 `native/tests`로 실행하고 실제 실행 수·실패·skip을 기록한다. Windows 패키징 및 MVP 회귀는 현재 `docs/process/P00.md`에 등록된 절차를 따른다.
+2. 실제 Chrome을 별도 시험 프로필로 열고 현재 MVP 산출물 `dist/mvp-extension`을 로드한다. `scripts/install-mvp-host.ps1`의 인자와 설치 안내에 따라 해당 ID로 현재 MVP 호스트를 등록한다. 과거 `dist/extension`·PCE 호스트의 검증을 MVP 연결 성공으로 대체하지 않는다.
+3. 합성 자료와 임시 저장소에서 확장 → Native Host → SQLite 저장/재조회 및 호스트 재시작 후 재조회를 확인한다. 식별 문자열·앞자리 0·decimal·0/false 보존을 확인하고, 호스트 없음·등록 ID 불일치의 오류도 확인한다.
+4. Chrome 버전, 확장 ID, 호스트 빌드/커밋, 실행 명령, 통과·실패·미검증, 시험 등록 제거 결과를 기록한다. 사용자 DB와 기존 등록을 덮어쓰지 않는다. 나라장터 실화면/내부망 정책은 별도의 허용된 환경에서 확인하기 전까지 미검증으로 남긴다.
