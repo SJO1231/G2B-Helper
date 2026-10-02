@@ -16,15 +16,21 @@ export interface CollectionPreview { token: string; observations: ProcurementObs
 export interface CollectionDecision { recordId: string; field: string; useIncoming: boolean; }
 export interface FieldDictionary { keys: Record<string, string>; values: Record<string, Record<string, string>>; }
 export type MvpShortcutAction = 'extract' | 'collect' | 'db' | 'document' | 'launcher';
-export type MvpColumnType = 'text' | 'money' | 'date';
-export interface MvpSettings { theme: 'light' | 'dark'; extractionMode: 'tables' | 'all'; hideEmptyColumns: boolean; hideUnmappedColumns: boolean; hideEmptyTables?: boolean; dictionary: FieldDictionary; launchers: { id: string; label: string; script: string }[]; shortcuts?: Partial<Record<MvpShortcutAction,string>>; columnTypes?: Record<string,MvpColumnType>; columnLocks?: Record<string,boolean>; screenRules?: CaptureScreenRule[]; userColumns?: Partial<Record<ProcurementStage,string[]>>; }
+export const columnTypeLabels = { text: '텍스트', number: '숫자', money: '금액', percent: '백분율', date: '날짜', datetime: '날짜·시간', boolean: '체크값' } as const;
+export type MvpColumnType = keyof typeof columnTypeLabels;
+export interface MvpColumnFormat { decimals?: number; grouping?: boolean; dateFormat?: 'dot' | 'dash' | 'compact'; }
+export type GridFilter = { mode: 'values'; values: string[] } | { mode: 'exact' | 'includes' | 'exclude'; terms: string[] };
+export interface GridViewState { search: string; combine: 'and' | 'or'; filters: [string, GridFilter][]; columns: { key: string; width: number; visible: boolean }[]; sorters: { key: string; dir: 'asc' | 'desc' }[]; userColumnsVisible?: boolean; }
+export interface MvpSettings { theme: 'light' | 'dark'; extractionMode: 'tables' | 'all'; hideEmptyColumns: boolean; hideUnmappedColumns: boolean; hideEmptyTables?: boolean; dictionary: FieldDictionary; launchers: { id: string; label: string; script: string }[]; shortcuts?: Partial<Record<MvpShortcutAction,string>>; columnTypes?: Record<string,MvpColumnType>; columnFormats?: Record<string,MvpColumnFormat>; columnLocks?: Record<string,boolean>; screenRules?: CaptureScreenRule[]; userColumns?: Partial<Record<ProcurementStage,string[]>>; }
 export interface GridRendererOptions {
   label: string; rows: JsonRow[]; settings: MvpSettings; readOnly?: boolean;
   userColumnKeys?: string[];
+  viewState?: GridViewState;
   itemColumnKeys?: string[];
   readOnlyColumnKeys?: string[];
   onRowsChanged?: (rows: JsonRow[]) => void; onColumnRename?: (key: string, label: string) => void;
   onColumnType?: (key: string, type: MvpColumnType) => void;
+  onColumnFormat?: (key: string, format: MvpColumnFormat) => void;
   onColumnLock?: (key: string, locked: boolean) => void;
   onNotice?: (message: string) => void;
   onValueDictionary?: (key: string, value: unknown) => void;
@@ -39,7 +45,8 @@ export interface GridRendererHandle {
   setUserColumnsVisible(visible: boolean): void;
   toggleSelectedBoolean(key: string): void;
   updateDerivedValues(compute: (row: JsonRow) => JsonRow): void;
-  addColumn(key: string): void; removeColumn(key: string): void; exportExcel(filename: string): void;
+  getViewState(): GridViewState;
+  addColumn(key: string): void; removeColumn(key: string): void; exportExcel(filename: string): void; exportCsv(filename: string): void;
   destroy(): void;
 }
 export type MvpRpcCommand = 'mvp.health' | 'mvp.preview' | 'mvp.apply' | 'mvp.records' | 'mvp.edit' | 'mvp.trash' | 'mvp.restore' | 'mvp.settings.read' | 'mvp.settings.save';

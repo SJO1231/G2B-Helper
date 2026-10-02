@@ -305,7 +305,12 @@ class MvpGateway:
             require(isinstance(dictionary.get('keys'), dict) and all(isinstance(v, str) for v in dictionary['keys'].values()), '키 사전을 확인하세요.')
             require(isinstance(dictionary.get('values'), dict) and all(isinstance(v, dict) and all(isinstance(t, str) for t in v.values()) for v in dictionary['values'].values()), '값 사전을 확인하세요.')
             require(isinstance(settings.get('launchers'), list) and all(isinstance(c, dict) and all(isinstance(c.get(k), str) for k in ('id', 'label', 'script')) for c in settings['launchers']), '런처를 확인하세요.')
-            require(isinstance(settings.get('columnTypes', {}), dict) and all(v in ('text', 'money', 'date') for v in settings.get('columnTypes', {}).values()), '열 타입을 확인하세요.')
+            require(isinstance(settings.get('columnTypes', {}), dict) and all(isinstance(v, str) and v in ('text', 'number', 'money', 'percent', 'date', 'datetime', 'boolean') for v in settings.get('columnTypes', {}).values()), '열 타입을 확인하세요.')
+            formats = settings.get('columnFormats', {})
+            require(isinstance(formats, dict) and all(isinstance(value, dict) and set(value) <= {'decimals', 'grouping', 'dateFormat'}
+                    and ('decimals' not in value or type(value['decimals']) is int and 0 <= value['decimals'] <= 20)
+                    and ('grouping' not in value or type(value['grouping']) is bool)
+                    and ('dateFormat' not in value or isinstance(value['dateFormat'], str) and value['dateFormat'] in ('dot', 'dash', 'compact')) for value in formats.values()), '열 서식을 확인하세요.')
             require(isinstance(settings.get('columnLocks', {}), dict) and all(isinstance(key, str) and type(value) is bool for key, value in settings.get('columnLocks', {}).items()), '열 잠금은 체크값 목록이어야 합니다.')
             require('screenRules' not in settings or valid_screen_rules(settings['screenRules']), '수집 화면 규칙을 확인하세요.')
             require(isinstance(settings.get('shortcuts', {}), dict) and all(k in ('extract', 'collect', 'db', 'document', 'launcher') and isinstance(v, str) for k, v in settings.get('shortcuts', {}).items()), '단축키를 확인하세요.')

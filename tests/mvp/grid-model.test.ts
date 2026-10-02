@@ -1,9 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import type { MvpSettings } from '../../apps/mvp/contracts';
-import { GridModel, editedValue, exportMatrix, formatValue, matchesView, nestedPreview, parseClipboard, valueToken, type GridFilter } from '../../apps/mvp/grid-model';
+import { GridModel, compareValues, dateParts, editedValue, excelFormat, excelValue, exportMatrix, formatValue, matchesView, nestedPreview, parseClipboard, valueToken, type GridFilter } from '../../apps/mvp/grid-model';
 
 const settings: MvpSettings = { theme: 'light', extractionMode: 'tables', hideEmptyColumns: true, hideUnmappedColumns: false, dictionary: { keys: {}, values: {} }, launchers: [] };
 describe('MVP worksheet model (synthetic data)', () => {
+  it('sorts exact numeric strings and mixed valid dates without rounding through Number', () => {
+    expect(['1.2', '-2', '1.02', '-10'].sort((a, b) => compareValues(a, b, 'money'))).toEqual(['-10', '-2', '1.02', '1.2']);
+    expect(compareValues('12345678901234567890.0000000001', '12345678901234567890.0000000002', 'number')).toBe(-1);
+    expect(['2026-02-01', '20260101', '2026.01.20'].sort((a, b) => compareValues(a, b, 'date'))).toEqual(['20260101', '2026.01.20', '2026-02-01']);
+    expect(dateParts('0001-01-01')).toEqual(['0001', '01', '01']); expect(dateParts('2024-02.29')).toBeUndefined();
+  });
+  it('accepts grouped decimals, percentage points and calendar timestamps while retaining precise values', () => {
+    expect(editedValue('1,234.000000000000000001', '', 'money')).toBe('1234.000000000000000001');
+    for (const value of ['1,23', '1e3', 'NaN', '1,,234']) expect(() => editedValue(value, '', 'number')).toThrow();
+    expect(editedValue('12.5%', '', 'percent')).toBe('12.5'); expect(formatValue('12.5', 'percent')).toBe('12.5%');
+    expect(editedValue('false', 'true', 'boolean')).toBe('false'); expect(editedValue('false', true, 'boolean')).toBe(false);
+    expect(formatValue(editedValue('2024-02-29T23:59:59.001', '', 'datetime'), 'datetime', { dateFormat: 'dash' })).toBe('2024-02-29 23:59:59.001');
+    expect(compareValues('2024-02-29 12:00:00.1', '2024-02-29 12:00:00.100', 'datetime')).toBe(0);
+    for (const value of ['2026-02-29 12:00', '2024-02.29 12:00', '2024-02-29 24:00', '2024-02-29 12:60']) expect(() => editedValue(value, '', 'datetime')).toThrow();
+  });
+  it('limits rounding to display and safe Excel numbers, preserving identifiers and long decimals as text', () => {
+    const value = '12345678901234567890.123456789'; expect(formatValue(value, 'money', { decimals: 2 })).toBe('12,345,678,901,234,567,890.12'); expect(excelValue(value, 'money')).toBe(value);
+    expect(excelValue('000123', 'number')).toBe('000123'); expect(excelValue('1234.5', 'money')).toBe(1234.5); expect(excelValue('1234', 'text')).toBe('1234');
+    expect(excelFormat('percent', { decimals: 1 })).toBe('0.0"%"'); expect(formatValue('20261002', 'date', { dateFormat: 'dash' })).toBe('2026-10-02');
+  });
   it('previews a representative item name while keeping generic nested JSON and raw values untouched', () => {
     for (const name of ['dtlsPrnm', 'dtlsPrnmNm', 'itemCfnm', '품명']) {
       const items = [{ [name]: '합성 물품', quantity: 0, completed: false }, { [name]: '둘째 물품' }];

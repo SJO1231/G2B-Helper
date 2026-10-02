@@ -7,26 +7,31 @@ vi.mock('tabulator-tables', () => {
   class MockTable {
     options: any; data: any[]; columns: any[]; listeners = new Map<string, Function[]>(); filter?: Function; destroyed = false;
     rowCache = new WeakMap<object, any>(); rangeCells: any[][] = [];
+    sorters: any[] = [];
     constructor(_host: unknown, options: any) {
       this.options = options; this.data = structuredClone(options.data);
       this.columns = options.columns.map((definition: any) => this.column(definition)); state.tables.push(this);
     }
     column(definition: any) {
       let visible = definition.visible !== false;
-      return { definition, getField: () => definition.field, getElement: () => new FakeElement(), isVisible: () => visible, show: () => { visible = true; }, hide: () => { visible = false; } };
+      let width = definition.width || 150;
+      return { definition, getWidth: () => width, setWidth: (next: number) => { width = next; }, getField: () => definition.field, getElement: () => new FakeElement(), isVisible: () => visible, show: () => { visible = true; }, hide: () => { visible = false; } };
     }
     on(name: string, listener: Function) { this.listeners.set(name, [...this.listeners.get(name) || [], listener]); }
     fire(name: string, ...args: unknown[]) { this.listeners.get(name)?.forEach(listener => listener(...args)); }
     row(data: any) {
       const cached = this.rowCache.get(data); if (cached) return cached;
       const self = this;
-      const row = { getData: () => data, reformat: vi.fn(), getCell: (field: string) => ({
+      const row = { getData: () => data, reformat: vi.fn(), getCell: (field: string) => { let old: unknown; const cell = {
         getField: () => field, getRow: () => row, getValue: () => data[field], getElement: () => new FakeElement(),
-        setValue: (value: unknown) => { data[field] = value; self.fire('cellEdited'); }, edit: vi.fn(),
-      }) };
+        getOldValue: () => old, setValue: (value: unknown) => { old = data[field]; data[field] = value; self.fire('cellEdited', cell); }, edit: vi.fn(),
+      }; return cell; } };
       this.rowCache.set(data, row); return row;
     }
     getRows(range?: string) { return this.data.filter(row => range !== 'active' || !this.filter || this.filter(row)).map(row => this.row(row)); }
+    getRow(id: number) { const data = this.data.find(row => row._mvpRow === id); return data ? this.row(data) : false; }
+    getSorters() { return this.sorters; }
+    setSort(sorters: any[]) { this.sorters = sorters.map(sort => ({ field: sort.column, dir: sort.dir })); }
     getColumns() { return this.columns; }
     getColumn(field: string) { return this.columns.find(column => column.getField() === field); }
     showColumn(field: string) { this.getColumn(field).show(); }
@@ -76,6 +81,23 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
+  it('undoes a paste batch and recalculates derived cells outside history', () => {
+    const parent = new FakeElement(); let handle: ReturnType<typeof renderGrid>;
+    handle = renderGrid(parent as unknown as HTMLElement, { label: '실행 취소', rows: [{ amount: '100', total: '200' }], settings, readOnlyColumnKeys: ['total'], onRowsChanged: () => handle.updateDerivedValues(row => ({ total: String(Number(row.amount) * 2) })) });
+    const table = state.tables[0]; table.fire('tableBuilt'); table.rangeCells = [[table.getRows()[0].getCell('f0')]];
+    table.options.clipboardPasteAction([['1,234']]); expect(handle.rows()).toEqual([{ amount: '1234', total: '2468' }]);
+    const key = (value: string, shiftKey = false) => parent.children[0].fire('keydown', { target: parent.children[0].children[4], key: value, ctrlKey: true, shiftKey, preventDefault() {}, stopImmediatePropagation() {} });
+    key('z'); expect(handle.rows()).toEqual([{ amount: '100', total: '200' }]); key('z', true); expect(handle.rows()).toEqual([{ amount: '1234', total: '2468' }]);
+    handle.setSettings({ ...settings, columnLocks: { amount: true } }); key('z'); expect(handle.rows()[0].amount).toBe('1234'); handle.destroy();
+  });
+  it('restores ordered columns, widths and sorting while exports share visible rows and headers', () => {
+    const source = [{ code: '001', amount: '1234.5', flag: false }, { code: '002', amount: '9999999999999999.1', flag: true }];
+    const handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '보기 복원', rows: source, settings, viewState: { search: '001', combine: 'or', filters: [], columns: [{ key: 'amount', width: 210, visible: true }, { key: 'code', width: 180, visible: true }, { key: 'flag', width: 150, visible: false }], sorters: [{ key: 'amount', dir: 'desc' }] } });
+    const table = state.tables[0]; table.fire('tableBuilt'); expect(handle.getViewState().columns.map(c => c.key)).toEqual(['amount', 'code', 'flag']); expect(handle.getViewState().sorters).toEqual([{ key: 'amount', dir: 'desc' }]);
+    handle.exportExcel('보기'); handle.exportCsv('보기'); const [excel, csv] = state.files.map(file => file.book.Sheets['자료']);
+    expect(excel.A1.v).toBe(csv.A1.v); expect(excel.B2.v).toBe(csv.B2.v); expect(excel['!ref']).toBe(csv['!ref']); expect(excel.A2).toMatchObject({ t: 'n', v: 1234.5 }); expect(excel.A2.z).toContain('#,##0'); expect(excel['!cols'][0].wpx).toBe(210);
+    expect(handle.rows()).toEqual(source); handle.destroy();
+  });
   it('keeps whole-sheet cloning linear while building and refreshing column definitions', () => {
     const source = Array.from({ length: 40 }, (_, row) => Object.fromEntries(Array.from({ length: 24 }, (_, column) => ['key' + column, column === 0 ? 0 : column === 1 ? false : `${row}:${column}`])));
     const clone = vi.spyOn(globalThis, 'structuredClone'); let handle: ReturnType<typeof renderGrid> | undefined;
@@ -115,13 +137,13 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     const onNotice = vi.fn(), parent = new FakeElement();
     const handle = renderGrid(parent as unknown as HTMLElement, { label: '알림', rows: [{ amount: 1 }], settings, onNotice });
     const table = state.tables[0]; table.fire('tableBuilt'); const cell = table.getRows()[0].getCell('f0'); table.rangeCells = [[cell]];
-    table.options.clipboardPasteAction([['invalid']]); expect(onNotice).toHaveBeenLastCalledWith('금액은 쉼표 없이 숫자와 소수점으로 입력하세요.');
+    table.options.clipboardPasteAction([['invalid']]); expect(onNotice).toHaveBeenLastCalledWith('숫자와 소수점을 입력하세요. 쉼표는 세 자리씩 구분하세요.');
     const root = parent.children[0]; expect(root.children[3].hidden).toBe(true); expect(root.children[0].children.some(child => child.className === 'mvp-grid-status')).toBe(false);
     table.options.clipboardPasteAction([['1.000000000000000001']]); expect(onNotice).toHaveBeenLastCalledWith(''); handle.destroy();
     const fallbackParent = new FakeElement(), fallback = renderGrid(fallbackParent as unknown as HTMLElement, { label: '독립 알림', rows: [{ amount: 1 }], settings });
     const fallbackTable = state.tables[1]; fallbackTable.fire('tableBuilt'); fallbackTable.rangeCells = [[fallbackTable.getRows()[0].getCell('f0')]]; fallbackTable.options.clipboardPasteAction([['invalid']]);
     const fallbackRoot = fallbackParent.children[0]; expect(fallbackRoot.children[3].className).toBe('mvp-grid-status');
-    expect(fallbackRoot.children[3].title).toContain('금액'); fallback.destroy();
+    expect(fallbackRoot.children[3].title).toContain('숫자'); fallback.destroy();
   });
   it('uses the same visible-checkbox meaning for all, empty, unmapped and user column groups', () => {
     const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: '열 보기', rows: [{ blank: null, code: '001', unmapped: false, memo: 'user' }], userColumnKeys: ['memo'], settings: { ...settings, hideUnmappedColumns: true } });

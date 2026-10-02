@@ -2,8 +2,8 @@ import { TabulatorFull as Tabulator, type CellComponent, type ColumnDefinition, 
 import * as XLSX from 'xlsx';
 import 'tabulator-tables/dist/css/tabulator.min.css';
 import './grid.css';
-import type { GridRendererHandle, GridRendererOptions, JsonRow, MvpColumnType, MvpSettings } from './contracts';
-import { GridModel, choiceText, editedValue, exportMatrix, formatValue, isEmpty, matchesView, nestedPreview, parseClipboard, rawText, valueToken, type GridBufferRow, type GridColumn, type GridView } from './grid-model';
+import { columnTypeLabels, type GridRendererHandle, type GridRendererOptions, type GridViewState, type JsonRow, type MvpColumnType, type MvpColumnFormat, type MvpSettings } from './contracts';
+import { GridModel, choiceText, compareValues, editedValue, excelFormat, excelValue, exportMatrix, formatValue, isEmpty, matchesView, nestedPreview, parseClipboard, rawText, valueToken, type GridBufferRow, type GridColumn, type GridView } from './grid-model';
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -31,11 +31,17 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
   let settings = structuredClone(options.settings);
   const model = new GridModel(options.rows, options.userColumnKeys);
   const initial = model.encode(options.rows);
-  const view: GridView = { search: '', combine: 'and', filters: new Map() };
+  const saved = options.viewState;
+  const view: GridView = { search: saved?.search || '', combine: saved?.combine || 'and', filters: new Map(saved?.filters.filter(([key]) => model.columns.some(column => column.key === key))) };
   let rowFilter: ((row: JsonRow) => boolean) | undefined;
   const visibility = new Map<string, boolean>();
+  const widths = new Map<string, number>();
+  for (const state of saved?.columns || []) {
+    const column = model.columns.find(column => column.key === state.key);
+    if (column) { visibility.set(column.field, state.visible); widths.set(column.field, state.width); }
+  }
   const readOnlyKeys = new Set(options.readOnlyColumnKeys || []);
-  let userColumnsVisible = true;
+  let userColumnsVisible = saved?.userColumnsVisible !== false;
   let ready = false, disposed = false, batching = false, extending = false;
   let editSeed: { cell: CellComponent; text: string } | undefined;
   const pending: (() => void)[] = [];
@@ -56,6 +62,19 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
   panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-modal', 'true');
   root.append(toolbar, host, panel, status, typingTarget); container.append(root);
   let table: Tabulator;
+  type Edit = { id: number; field: string; before: unknown; after: unknown };
+  // ponytail: 100 cell-edit batches per open sheet; persist history only if cross-window undo is needed.
+  const undo: Edit[][] = [], redo: Edit[][] = [];
+  let replaying = false, batchEdits: Edit[] = [];
+  const remember = (edits: Edit[]): void => { if (!edits.length) return; undo.push(edits); if (undo.length > 100) undo.shift(); redo.length = 0; };
+  const replay = (back: boolean): void => {
+    const from = back ? undo : redo, to = back ? redo : undo, edits = from.at(-1);
+    if (!edits) return;
+    if (edits.some(edit => !table.getRow(edit.id) || !getColumn(edit.field) || !editableColumn(getColumn(edit.field)!))) { notice('잠긴 열의 편집은 실행 취소할 수 없습니다.'); return; }
+    replaying = true;
+    try { batch(() => { for (const edit of back ? [...edits].reverse() : edits) table.getRow(edit.id).getCell(edit.field).setValue(structuredClone(back ? edit.before : edit.after)); }); from.pop(); to.push(edits); }
+    finally { replaying = false; }
+  };
   const whenReady = (run: () => void): void => { if (disposed) return; if (ready) run(); else pending.push(run); };
   const buffer = (range?: 'active'): GridBufferRow[] => ready ? table.getRows(range).map(row => row.getData() as GridBufferRow) : initial;
   // Persistence pairs rows with record IDs in input order; sorting is presentation only.
@@ -69,7 +88,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
     if (disposed || batching) return;
     notice(''); options.onRowsChanged?.(rows()); updateCount();
   };
-  const batch = (run: () => void): void => { batching = true; try { run(); } finally { batching = false; } emit(); };
+  const batch = (run: () => void): void => { batching = true; batchEdits = []; try { run(); } finally { batching = false; if (!replaying) remember(batchEdits); batchEdits = []; } emit(); };
   const updateCount = (): void => {
     if (disposed) return;
     const active = buffer('active').filter(row => !model.blankSlot(row)).length;
@@ -77,6 +96,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
   };
   const getColumn = (field: string): GridColumn | undefined => model.columns.find(column => column.field === field);
   const typeOf = (column: GridColumn): MvpColumnType | undefined => settings.columnTypes && Object.hasOwn(settings.columnTypes, column.key) ? settings.columnTypes[column.key] : undefined;
+  const formatOf = (column: GridColumn): MvpColumnFormat => settings.columnFormats && Object.hasOwn(settings.columnFormats, column.key) ? settings.columnFormats[column.key] : {};
   const lockedColumn = (column: GridColumn): boolean => settings.columnLocks?.[column.key] === true;
   const editableColumn = (column: GridColumn): boolean => !options.readOnly && !readOnlyKeys.has(column.key) && !lockedColumn(column);
   const selected = (): CellComponent[] => table.getRanges()[0]?.getCells().flat().filter(cell => !!getColumn(cell.getField())) || [];
@@ -279,7 +299,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
     return [{ label: '행 삭제', disabled, action: () => {
       if (disabled || disposed) return;
       if (options.onDeleteRows) options.onDeleteRows([model.decode(data)], [data._mvpRow]);
-      else void table.deleteRow(data._mvpRow).then(() => { if (!disposed) { emit(); void extendSlots(); } }).catch(report);
+      else void table.deleteRow(data._mvpRow).then(() => { if (!disposed) { undo.length = redo.length = 0; emit(); void extendSlots(); } }).catch(report);
     } }];
   }
   function definition(column: GridColumn, sourceRows?: JsonRow[]): ColumnDefinition {
@@ -289,13 +309,20 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
       { label: '숨김 열 보기 / 복원', action: columnChooser },
       { label: '표시명 설정', action: () => renameColumn(column) },
       { label: readOnlyKeys.has(column.key) ? '열 잠금 (읽기 전용)' : lockedColumn(column) ? '열 잠금 해제' : '열 잠금', disabled: !!options.readOnly || readOnlyKeys.has(column.key), action: () => setColumnLock(column, !lockedColumn(column)) },
-      { label: '열 타입', menu: (['text', 'money', 'date'] as const).map(type => ({ label: ({ text: '텍스트', money: '금액', date: '날짜' })[type], action: () => setType(column, type) })) },
+      { label: '열 타입', menu: (Object.keys(columnTypeLabels) as MvpColumnType[]).map(type => ({ label: columnTypeLabels[type], action: () => setType(column, type) })) },
+      { label: '열 서식', action: () => formatColumn(column) },
+      { label: '자동 너비', action: () => {
+        const context = document.createElement('canvas').getContext('2d'); if (!context) return;
+        context.font = getComputedStyle(host).font;
+        const labels = [model.label(column, settings), ...buffer('active').slice(0, 200).map(row => formatValue(row[column.field], typeOf(column), formatOf(column)))];
+        table.getColumn(column.field).setWidth(Math.min(600, Math.max(85, ...labels.map(text => context.measureText(text).width + 42))));
+      } },
       ...(!options.readOnly ? [{ label: '사용자 열 추가', action: addColumnDialog }, ...(column.user && editableColumn(column) ? [{ label: '사용자 열 삭제', action: () => handle.removeColumn(column.key) }] : [])] : []),
     ];
     return {
       field: column.field, title: model.label(column, settings), headerTooltip: column.key || '(빈 키)',
-      width: 150, minWidth: 85, headerSort: true, visible: visibility.get(column.field) ?? (column.user ? userColumnsVisible : model.visible(column, sourceRows ?? rows(), settings)),
-      hozAlign: typeOf(column) === 'money' ? 'right' : 'left',
+      width: widths.get(column.field) ?? 150, minWidth: 85, headerSort: true, visible: visibility.get(column.field) ?? (column.user ? userColumnsVisible : model.visible(column, sourceRows ?? rows(), settings)),
+      hozAlign: ['money', 'number', 'percent'].includes(typeOf(column) || '') ? 'right' : typeOf(column) === 'boolean' ? 'center' : 'left',
       headerContextMenu: menu, editor: options.readOnly ? undefined : editCell,
       // Tabulator 6.5 loadMenuEvent accepts functions; @types 6.3 declares only arrays.
       contextMenu: (options.onValueDictionary || options.allowRowDelete ? (_event: UIEvent, cell: CellComponent) => [
@@ -308,7 +335,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
       sorter: (a: unknown, b: unknown, rowA: RowComponent, rowB: RowComponent, _column: ColumnComponent, dir: string) => {
         const blankA = model.blankSlot(rowA.getData() as GridBufferRow), blankB = model.blankSlot(rowB.getData() as GridBufferRow);
         if (blankA !== blankB) return (blankA ? 1 : -1) * (dir === 'desc' ? -1 : 1);
-        return typeof a === 'number' && typeof b === 'number' ? a - b : rawText(a).localeCompare(rawText(b), undefined, { numeric: true });
+        return compareValues(a, b, typeOf(column));
       },
       titleFormatter: () => {
         const title = element('span', undefined, 'mvp-grid-column-title');
@@ -336,7 +363,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
       formatter: cell => {
         const value = cell.getValue(), span = element('span');
         const dictionary = Object.hasOwn(settings.dictionary.values, column.key) ? settings.dictionary.values[column.key] : undefined;
-        span.textContent = dictionary && Object.prototype.hasOwnProperty.call(dictionary, String(value)) ? dictionary[String(value)] : value !== null && typeof value === 'object' ? nestedPreview(value, options.itemColumnKeys?.includes(column.key) ? 'items' : column.key) : formatValue(value, typeOf(column));
+        span.textContent = dictionary && Object.prototype.hasOwnProperty.call(dictionary, String(value)) ? dictionary[String(value)] : value !== null && typeof value === 'object' ? nestedPreview(value, options.itemColumnKeys?.includes(column.key) ? 'items' : column.key) : formatValue(value, typeOf(column), formatOf(column));
         span.title = rawText(value);
         if (value !== null && typeof value === 'object') {
           span.className = 'mvp-grid-nested'; span.setAttribute('role', 'button'); span.tabIndex = 0;
@@ -348,6 +375,27 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
         return span;
       },
     };
+  }
+  function formatColumn(column: GridColumn): void {
+    const content = openPanel(model.label(column, settings) + ' 서식'), format = formatOf(column), type = typeOf(column);
+    const decimals = labelledInput('소수 자릿수', 'number'); decimals.min = '0'; decimals.max = '20'; decimals.step = '1'; decimals.placeholder = '원본 유지'; decimals.value = format.decimals === undefined ? '' : String(format.decimals);
+    const grouping = labelledInput('천 단위 구분', 'checkbox'); grouping.checked = format.grouping ?? type === 'money';
+    const date = element('select'); date.setAttribute('aria-label', '날짜 표시');
+    for (const [value, label] of [['dot', 'YYYY.MM.DD'], ['dash', 'YYYY-MM-DD'], ['compact', 'YYYYMMDD']]) { const option = element('option', label); option.value = value; date.append(option); } date.value = format.dateFormat || 'dot';
+    const line = (name: string, input: HTMLElement): HTMLLabelElement => { const label = element('label', name, 'mvp-grid-format-line'); label.append(input); return label; };
+    if (['number', 'money', 'percent'].includes(type || '')) content.append(line('소수 자릿수', decimals), line('천 단위 구분', grouping));
+    if (type === 'date' || type === 'datetime') content.append(line('날짜 표시', date));
+    if (!['number', 'money', 'percent', 'date', 'datetime'].includes(type || '')) content.append(element('p', '숫자 또는 날짜 타입을 선택하면 표시 서식을 설정할 수 있습니다.'));
+    if (type === 'percent') content.append(element('p', '12.5 → 12.5%. 원본 숫자는 유지합니다.'));
+    content.append(button('적용', () => {
+      const number = decimals.value === '' ? undefined : Number(decimals.value);
+      if (number !== undefined && (!Number.isInteger(number) || number < 0 || number > 20)) { notice('소수 자릿수는 0~20의 정수입니다.'); return; }
+      const next: MvpColumnFormat = {};
+      if (['number', 'money', 'percent'].includes(type || '')) { if (number !== undefined) next.decimals = number; next.grouping = grouping.checked; }
+      if (type === 'date' || type === 'datetime') next.dateFormat = date.value as MvpColumnFormat['dateFormat'];
+      settings.columnFormats = Object.fromEntries([...Object.entries(settings.columnFormats || {}).filter(([key]) => key !== column.key), [column.key, next]]);
+      handle.setSettings(settings); options.onColumnFormat?.(column.key, next); closePanel();
+    }));
   }
   function openNested(cell: CellComponent, column: GridColumn): void {
     const value = cell.getValue();
@@ -388,12 +436,16 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
   };
   const combine = element('select'); combine.setAttribute('aria-label', '여러 열 필터 결합');
   for (const [value, label] of [['and', '모두 충족 (AND)'], ['or', '하나 이상 충족 (OR)']]) { const option = element('option', label); option.value = value; combine.append(option); }
+  combine.value = view.combine;
   combine.addEventListener('change', () => { view.combine = combine.value as 'and' | 'or'; whenReady(applyFilter); });
   const resetFilters = button('열 필터 해제', () => { view.filters.clear(); whenReady(applyFilter); });
   resetFilters.title = '머리글에서 설정한 열 필터만 해제합니다. 전체 검색어는 유지합니다.';
   toolbar.append(button('숨김 열', () => whenReady(columnChooser)), combine, resetFilters);
   if (!options.readOnly) toolbar.append(button('+ 사용자 열', () => whenReady(addColumnDialog)));
   toolbar.append(count);
+  const order = new Map(saved?.columns.map((column, index) => [column.key, index]));
+  // Restore the order before construction: repeated moveColumn calls each relayout the whole sheet.
+  const orderedColumns = model.columns.slice().sort((a, b) => (order.get(a.key) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.key) ?? Number.MAX_SAFE_INTEGER));
   table = new Tabulator(host, {
     data: [...initial, ...model.slots(Math.max(16, Math.ceil(host.clientHeight / 24) + 3))],
     index: '_mvpRow', height: '100%', rowHeight: 24, layout: 'fitData', nestedFieldSeparator: false, popupContainer: root,
@@ -404,11 +456,22 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
     clipboardPasteParser: (text: string) => { try { return parseClipboard(text); } catch (error) { report(error); return false; } }, clipboardPasteAction: pasteRows,
     rowHeader: { formatter: 'rownum', width: 40, headerSort: false, resizable: false, frozen: true },
     rowContextMenu: options.allowRowDelete ? (_event: UIEvent, row: RowComponent) => rowDeleteMenu(row) : undefined,
-    columns: model.columns.map(column => definition(column, options.rows)), placeholder: '자료가 없습니다. 사용자 열을 추가하여 입력할 수 있습니다.',
+    columns: orderedColumns.map(column => definition(column, options.rows)), placeholder: '자료가 없습니다. 사용자 열을 추가하여 입력할 수 있습니다.',
   } as any);
   const resize = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(() => { void extendSlots(); });
-  table.on('tableBuilt', () => { if (disposed) return; ready = true; resize?.observe(host); pending.splice(0).forEach(run => run()); updateCount(); });
-  table.on('cellEdited', () => { emit(); void extendSlots(); });
+  table.on('tableBuilt', () => {
+    if (disposed) return; ready = true; resize?.observe(host);
+    if (saved?.sorters.length) table.setSort(saved.sorters.flatMap(sort => { const column = model.columns.find(column => column.key === sort.key); return column ? [{ column: column.field, dir: sort.dir }] : []; }));
+    if (view.search || view.filters.size) applyFilter(); pending.splice(0).forEach(run => run()); updateCount();
+  });
+  table.on('cellEdited', (cell: CellComponent) => {
+    const column = cell && getColumn(cell.getField());
+    if (!replaying && column && editableColumn(column)) {
+      const edit = { id: cell.getRow().getData()._mvpRow as number, field: cell.getField(), before: structuredClone(cell.getOldValue()), after: structuredClone(cell.getValue()) };
+      if (batching) batchEdits.push(edit); else remember([edit]);
+    }
+    emit(); void extendSlots();
+  });
   table.on('dataFiltered', updateCount);
   table.on('clipboardPasted', () => { void extendSlots(); });
   table.on('cellClick', (_event: UIEvent, cell: CellComponent) => { const column = getColumn(cell.getField()); if (column) openNested(cell, column); });
@@ -428,6 +491,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
     if (event.key === 'Escape' && !panel.hidden) { event.preventDefault(); event.stopPropagation(); closePanel(); return; }
     const target = event.target;
     if (!ready || options.readOnly || !(target instanceof Element) || target !== typingTarget && target.closest('input,textarea,select,button,.mvp-grid-nested')) return;
+    if ((event.ctrlKey || event.metaKey) && ['z', 'y'].includes(event.key.toLowerCase())) { event.preventDefault(); event.stopImmediatePropagation(); replay(event.key.toLowerCase() === 'z' && !event.shiftKey); return; }
     const cell = selected()[0]; if (!cell) return;
     if (event.key === 'Delete' || event.key === 'Backspace') {
       event.preventDefault(); event.stopImmediatePropagation();
@@ -476,12 +540,14 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
   host.addEventListener('click', focusSelection); root.addEventListener('keydown', keydown, true);
   const handle: GridRendererHandle = {
     rows: () => structuredClone(rows()),
+    getViewState: (): GridViewState => ({ search: view.search, combine: view.combine, userColumnsVisible, filters: structuredClone([...view.filters]), columns: ready ? table.getColumns().flatMap(column => { const source = getColumn(column.getField()); return source ? [{ key: source.key, width: column.getWidth(), visible: column.isVisible() }] : []; }) : saved?.columns || [], sorters: ready ? table.getSorters().flatMap(sort => { const column = getColumn(sort.field); return column ? [{ key: column.key, dir: sort.dir }] : []; }) : saved?.sorters || [] }),
     setSearch: search => { view.search = search; whenReady(applyFilter); },
     setRowFilter: predicate => { rowFilter = predicate; whenReady(applyFilter); },
     setSettings: next => {
       const hideChanged = next.hideEmptyColumns !== settings.hideEmptyColumns || next.hideUnmappedColumns !== settings.hideUnmappedColumns;
       settings = structuredClone(next); root.dataset.theme = settings.theme;
       whenReady(() => {
+        for (const column of table.getColumns()) if (getColumn(column.getField())) widths.set(column.getField(), column.getWidth());
         if (hideChanged) visibility.clear();
         const data = rows();
         for (const column of model.columns) {
@@ -522,8 +588,9 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
     addColumn: key => {
       if (options.readOnly || disposed) return;
       const column = model.addColumn(key);
+      undo.length = redo.length = 0;
       whenReady(() => { void table.addColumn(definition(column)).then(() => {
-        batch(() => table.getRows().forEach(row => row.getCell(column.field).setValue('')));
+        replaying = true; try { batch(() => table.getRows().forEach(row => row.getCell(column.field).setValue(''))); } finally { replaying = false; }
         options.onUserColumnsChanged?.(model.columns.filter(candidate => candidate.user).map(candidate => candidate.key));
       }); });
     },
@@ -531,6 +598,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
       if (options.readOnly || disposed) return;
       if (readOnlyKeys.has(key)) { report('읽기 전용 열은 삭제할 수 없습니다. 열 숨기기를 사용하세요.'); return; }
       const column = model.removeColumn(key); if (!column) return;
+      undo.length = redo.length = 0;
       view.filters.delete(key); visibility.delete(column.field);
       whenReady(() => { table.deleteColumn(column.field); emit(); applyFilter(); options.onUserColumnsChanged?.(model.columns.filter(candidate => candidate.user).map(candidate => candidate.key)); });
     },
@@ -538,8 +606,24 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
       const columns = visibleColumns().map(column => { const source = getColumn(column.getField())!; return { key: source.key, label: model.label(source, settings) }; });
       const book = XLSX.utils.book_new();
       const sheet = XLSX.utils.aoa_to_sheet(exportMatrix(model.rows(buffer('active')), columns));
+      sheet['!cols'] = visibleColumns().map(column => ({ wpx: column.getWidth() }));
+      const data = model.rows(buffer('active'));
+      columns.forEach((column, x) => data.forEach((row, y) => {
+        const type = settings.columnTypes?.[column.key], format = settings.columnFormats?.[column.key], address = XLSX.utils.encode_cell({ r: y + 1, c: x });
+        const value = excelValue(row[column.key], type);
+        if (value === undefined || value === null) return;
+        const display = type === 'date' || type === 'datetime' ? formatValue(value, type, format) : value;
+        const cell = sheet[address]; if (!cell) return;
+        cell.v = display as string | number | boolean; cell.t = typeof display === 'number' ? 'n' : typeof display === 'boolean' ? 'b' : 's'; cell.z = excelFormat(type, format);
+      }));
       XLSX.utils.book_append_sheet(book, sheet, '자료');
       XLSX.writeFile(book, /\.xlsx$/i.test(filename) ? filename : filename + '.xlsx');
+    }),
+    exportCsv: filename => whenReady(() => {
+      const columns = visibleColumns().map(column => { const source = getColumn(column.getField())!; return { key: source.key, label: model.label(source, settings) }; });
+      const sheet = XLSX.utils.aoa_to_sheet(exportMatrix(model.rows(buffer('active')), columns));
+      const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, '자료');
+      XLSX.writeFile(book, /\.csv$/i.test(filename) ? filename : filename + '.csv', { bookType: 'csv' });
     }),
     destroy: () => {
       if (disposed) return; disposed = true; ready = false; pending.length = 0; resize?.disconnect();

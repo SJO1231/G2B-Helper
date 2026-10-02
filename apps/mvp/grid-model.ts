@@ -1,6 +1,7 @@
-import type { JsonRow, MvpColumnType, MvpSettings } from './contracts';
+import Decimal from 'decimal.js';
+import type { JsonRow, MvpColumnType, MvpColumnFormat, MvpSettings, GridFilter } from './contracts';
+export type { GridFilter } from './contracts';
 
-export type GridFilter = { mode: 'values'; values: string[] } | { mode: 'exact' | 'includes' | 'exclude'; terms: string[] };
 export interface GridView { search: string; combine: 'and' | 'or'; filters: Map<string, GridFilter>; }
 export interface GridColumn { key: string; field: string; user: boolean; }
 export type GridBufferRow = Record<string, unknown> & { _mvpRow: number };
@@ -47,7 +48,7 @@ export function parseClipboard(text: string): string[][] {
   return rows;
 }
 
-function dateParts(text: string): [string, string, string] | undefined {
+export function dateParts(text: string): [string, string, string] | undefined {
   const match = /^(\d{4})(?:(\d{2})(\d{2})|([.-])(\d{2})\4(\d{2}))$/.exec(text);
   if (!match) return;
   const parts: [string, string, string] = [match[1], match[2] ?? match[5], match[3] ?? match[6]];
@@ -56,15 +57,47 @@ function dateParts(text: string): [string, string, string] | undefined {
   if (year < 1 || month < 1 || month > 12 || day < 1 || day > days[month - 1]) return;
   return parts;
 }
-export function formatValue(value: unknown, type?: MvpColumnType): string {
-  const text = rawText(value);
-  if (type === 'money') {
-    const match = /^([+-]?)(\d+)(\.\d+)?$/.exec(text);
-    if (match) return match[1] + match[2].replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (match[3] || '');
+function numericText(text: string): string | undefined {
+  const trimmed = text.trim();
+  return /^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?$/.test(trimmed) ? trimmed.replaceAll(',', '') : undefined;
+}
+function timeParts(text: string): { date: [string, string, string]; time: string } | undefined {
+  const match = /^(\d{8}|\d{4}([.-])\d{2}\2\d{2})[ T](\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?$/.exec(text);
+  if (!match) return;
+  const date = dateParts(match[1]);
+  if (!date || Number(match[3]) > 23 || Number(match[4]) > 59 || Number(match[5] || '0') > 59) return;
+  return { date, time: match[3] + ':' + match[4] + ':' + (match[5] || '00') + (match[6] || '') };
+}
+export function compareValues(a: unknown, b: unknown, type?: MvpColumnType): number {
+  const left = rawText(a), right = rawText(b);
+  if (['number', 'money', 'percent'].includes(type || '')) {
+    const x = numericText(left.replace(/%$/, '')), y = numericText(right.replace(/%$/, ''));
+    if (x !== undefined && y !== undefined) return new Decimal(x).cmp(y);
   }
   if (type === 'date') {
-    const parts = dateParts(text);
-    if (parts) return parts.join('.');
+    const x = dateParts(left), y = dateParts(right);
+    if (x && y) return x.join('').localeCompare(y.join(''));
+  }
+  if (type === 'datetime') {
+    const x = timeParts(left), y = timeParts(right);
+    if (x && y) return (x.date.join('') + x.time.slice(0, 8)).localeCompare(y.date.join('') + y.time.slice(0, 8)) || new Decimal('0' + x.time.slice(8)).cmp('0' + y.time.slice(8));
+  }
+  return typeof a === 'number' && typeof b === 'number' ? a - b : left.localeCompare(right, undefined, { numeric: true });
+}
+export function formatValue(value: unknown, type?: MvpColumnType, format: MvpColumnFormat = {}): string {
+  const text = rawText(value);
+  if (['number', 'money', 'percent'].includes(type || '')) {
+    let number = numericText(type === 'percent' ? text.replace(/%$/, '') : text);
+    if (number !== undefined) {
+      if (format.decimals !== undefined) number = new Decimal(number).toFixed(format.decimals, Decimal.ROUND_HALF_UP);
+      const match = /^([+-]?)(\d+)(\.\d+)?$/.exec(number)!;
+      return match[1] + ((format.grouping ?? type === 'money') ? match[2].replace(/\B(?=(\d{3})+(?!\d))/g, ',') : match[2]) + (match[3] || '') + (type === 'percent' ? '%' : '');
+    }
+  }
+  if (type === 'date' || type === 'datetime') {
+    const timestamp = type === 'datetime' ? timeParts(text) : undefined;
+    const parts = timestamp?.date ?? dateParts(text);
+    if (parts) return parts.join(format.dateFormat === 'dash' ? '-' : format.dateFormat === 'compact' ? '' : '.') + (timestamp ? ' ' + timestamp.time : '');
   }
   return text;
 }
@@ -72,17 +105,17 @@ export function formatValue(value: unknown, type?: MvpColumnType): string {
 /** A typed decimal is retained as text rather than rounded through binary Number. */
 export function editedValue(text: string, previous: unknown, type?: MvpColumnType): unknown {
   if (text === '' || type === 'text') return text;
-  if (type === 'date') {
-    if (!dateParts(text)) throw new Error('날짜는 유효한 YYYY.MM.DD, YYYY-MM-DD 또는 YYYYMMDD로 입력하세요.');
+  if (type === 'date' || type === 'datetime') {
+    if (!(type === 'date' ? dateParts(text) : timeParts(text))) throw new Error(type === 'date' ? '날짜는 유효한 YYYY.MM.DD, YYYY-MM-DD 또는 YYYYMMDD로 입력하세요.' : '날짜·시간은 유효한 YYYY-MM-DD HH:mm:ss로 입력하세요.');
     return text;
   }
-  if (type === 'money') {
-    if (!/^[+-]?\d+(\.\d+)?$/.test(text)) throw new Error('금액은 쉼표 없이 숫자와 소수점으로 입력하세요.');
-    return text;
+  if (type === 'money' || type === 'number' || type === 'percent') {
+    const number = numericText(type === 'percent' ? text.replace(/%$/, '') : text);
+    if (number === undefined) throw new Error('숫자와 소수점을 입력하세요. 쉼표는 세 자리씩 구분하세요.');
+    return number;
   }
-  if (typeof previous === 'boolean') {
-    if (text === 'true') return true;
-    if (text === 'false') return false;
+  if (type === 'boolean' || typeof previous === 'boolean') {
+    if (text === 'true' || text === 'false') return type === 'boolean' && typeof previous === 'string' ? text : text === 'true';
     throw new Error('불리언 값은 true 또는 false로 입력하세요.');
   }
   if (typeof previous === 'number') {
@@ -90,6 +123,19 @@ export function editedValue(text: string, previous: unknown, type?: MvpColumnTyp
     if (/^[+-]?(0|[1-9]\d*)$/.test(text) && Number.isSafeInteger(Number(text))) return Number(text);
   }
   return text;
+}
+
+/** Excel numbers have only 15 significant digits; identifiers and precise decimals stay text. */
+export function excelValue(value: unknown, type?: MvpColumnType): unknown {
+  if (!['number', 'money', 'percent'].includes(type || '') || typeof value !== 'string') return value;
+  const text = numericText(value.replace(/%$/, ''));
+  if (text === undefined || /^[+-]?0\d/.test(text) || text.replace(/[^\d]/g, '').replace(/^0+/, '').length > 15) return value;
+  const number = Number(text);
+  return Number.isFinite(number) && new Decimal(text).eq(String(number)) ? number : value;
+}
+export function excelFormat(type?: MvpColumnType, format: MvpColumnFormat = {}): string {
+  if (!['number', 'money', 'percent'].includes(type || '')) return '@';
+  return ((format.grouping ?? type === 'money') ? '#,##0' : '0') + (format.decimals === undefined ? '.####################' : format.decimals ? '.' + '0'.repeat(format.decimals) : '') + (type === 'percent' ? '"%"' : '');
 }
 
 export function matchesColumn(row: JsonRow, key: string, filter: GridFilter): boolean {

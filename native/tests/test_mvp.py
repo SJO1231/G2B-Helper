@@ -137,6 +137,17 @@ class MvpTests(unittest.TestCase):
         self.gateway.close(); self.gateway = MvpGateway(self.path)
         self.assertEqual(self.call('mvp.settings.read')['result'], saved)
 
+    def test_column_formats_and_seven_types_persist_and_invalid_settings_are_atomic(self):
+        types = {kind: kind for kind in ('text', 'number', 'money', 'percent', 'date', 'datetime', 'boolean')}
+        formats = {'money': {'decimals': 2, 'grouping': True}, 'date': {'dateFormat': 'dash'}, '__proto__': {'decimals': 0}}
+        saved = self.update_settings(columnTypes=types, columnFormats=formats)['result']
+        for invalid in [None, [], {'x': {'decimals': True}}, {'x': {'decimals': -1}}, {'x': {'decimals': 21}}, {'x': {'grouping': 1}}, {'x': {'dateFormat': 'other'}}, {'x': {'unknown': True}}]:
+            self.assertIn('error', self.update_settings(columnFormats=invalid))
+            self.assertEqual(self.call('mvp.settings.read')['result'], saved)
+        self.assertIn('error', self.update_settings(columnTypes={'bad': []}))
+        self.gateway.close(); self.gateway = MvpGateway(self.path)
+        self.assertEqual(self.call('mvp.settings.read')['result'], saved)
+
     def test_persisted_custom_rules_gate_source_and_keep_origin_allowlist(self):
         source = observation(); source['source'].update(url='https://www.g2b.go.kr/custom-page', areaCd='22', depth1='C1', depth2='C2', depth3='tab')
         raw = json.loads(source['rawJson']); raw['pointInfo'].update({key: source['source'][key] for key in ('areaCd', 'depth1', 'depth2', 'depth3')}); source['rawJson'] = json.dumps(raw)
