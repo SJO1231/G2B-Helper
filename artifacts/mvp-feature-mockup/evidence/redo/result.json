@@ -1,0 +1,85 @@
+{
+  "htmlSha256": "5a00ec6eb17431cb7fbdf6240f2d1ae2ab8beb0dd12a656f1b2b25511eb56944",
+  "checks": [
+    {
+      "name": "Baseline style, one HTML and sample-only boundaries",
+      "passed": true
+    },
+    {
+      "name": "Original title, buttons, tabs, 92px dates and same-line footer",
+      "passed": true
+    },
+    {
+      "name": "receipt: actual table IDs and every field; no invented extraction tabs",
+      "passed": true
+    },
+    {
+      "name": "receipt: original JSON retains table/pointInfo schema and source values",
+      "passed": true
+    },
+    {
+      "name": "bid: actual table IDs and every field; no invented extraction tabs",
+      "passed": true
+    },
+    {
+      "name": "bid: original JSON retains table/pointInfo schema and source values",
+      "passed": true
+    },
+    {
+      "name": "contract: actual table IDs and every field; no invented extraction tabs",
+      "passed": true
+    },
+    {
+      "name": "contract: original JSON retains table/pointInfo schema and source values",
+      "passed": true
+    },
+    {
+      "name": "Empty table option and pointInfo scope work and cancel restores settings",
+      "passed": true
+    },
+    {
+      "name": "Column properties hide/show each source field without dropping values",
+      "passed": true
+    },
+    {
+      "name": "Independent duplicate switches and changed rows remain visible",
+      "passed": true
+    },
+    {
+      "name": "DB keeps receipt/bid/contract tabs and representative item/detail fields",
+      "passed": true
+    },
+    {
+      "name": "Leading zeros, exact decimal, empty, zero and false stay distinct",
+      "passed": true
+    },
+    {
+      "name": "Column filter reset preserves search and original completion controls",
+      "passed": true
+    },
+    {
+      "name": "Existing seven settings tabs and sample new settings remain available",
+      "passed": true
+    },
+    {
+      "name": "Relation candidate connect/unlink is draft-only and cancellable",
+      "passed": true
+    },
+    {
+      "name": "Sidebar opens only on request and shares editor with full manager",
+      "passed": true
+    },
+    {
+      "name": "Narrow layout: table scroll, settings scroll and sidebar fit",
+      "passed": true
+    },
+    {
+      "name": "Reload resets sample edits; default additions can be reviewed separately",
+      "passed": true
+    }
+  ],
+  "pageErrors": [],
+  "consoleErrors": [],
+  "externalRequests": [],
+  "status": "passed"
+}

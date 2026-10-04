@@ -1,0 +1,20 @@
+{
+  "kind": "F40 HTML bytes before redo; P00 includes F41 authorization",
+  "entries": [
+    {
+      "file": "artifacts/mvp-feature-mockup/index.html",
+      "target": "artifacts\\mvp-feature-mockup\\history\\F40-before-F41\\index.html",
+      "sha256": "b2816b7e040499abc41e37e7aacb0e74f7ec0a2e540004df17beade278a286dd"
+    },
+    {
+      "file": "artifacts/mvp-feature-mockup/verify.mjs",
+      "target": "artifacts\\mvp-feature-mockup\\history\\F40-before-F41\\verify.mjs",
+      "sha256": "882b0bc0c8d50c18fb9562407ebb0f7c81d6565b0982500ebceaa21a138e4418"
+    },
+    {
+      "file": "docs/process/P00.md",
+      "target": "artifacts\\mvp-feature-mockup\\history\\F40-before-F41\\P00.md",
+      "sha256": "fa273d3e2315a6de56e83f039a303b82b753a9520d23c7e6d1ffe4659be54b73"
+    }
+  ]
+}
