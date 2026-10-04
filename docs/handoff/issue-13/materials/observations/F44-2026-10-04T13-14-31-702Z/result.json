@@ -1,0 +1,375 @@
+{
+  "phase": "after",
+  "sha256": "8e1c848eb97724c9538ed1594d0dc2a3268694d06436cbc96800022160c2a2c9",
+  "verifierSha256": "50b9f2c76372567c07cd9325cb9ef155fbc2eb09a403fe139f4e740e13f1a4ef",
+  "run": "evidence/runs/2026-10-04T13-14-31-702Z",
+  "checks": [
+    {
+      "name": "Preserved source schema, original controls and independent new file",
+      "passed": true
+    },
+    {
+      "name": "C01 display hides fractions without rounding or losing raw precision",
+      "passed": true
+    },
+    {
+      "name": "C02-C03 dense header/rows and actual product SVG",
+      "passed": true
+    },
+    {
+      "name": "C04-C09 sidebar top actions and quick/body-only screen memo",
+      "passed": true
+    },
+    {
+      "name": "C08 fixed memo visible on matching screen and hidden on other screen",
+      "passed": true
+    },
+    {
+      "name": "C05-C06 manager scope inline, title fallback, detail cancel and period validation",
+      "passed": true
+    },
+    {
+      "name": "C06 monthly/week/day calendar and range schedule selection",
+      "passed": true
+    },
+    {
+      "name": "C07 remote schedule below button with selected business context",
+      "passed": true
+    },
+    {
+      "name": "C16 launcher button and hotkey share execution; input/modal suppress hotkeys",
+      "passed": true
+    },
+    {
+      "name": "C11 right-click source key opens composite business-key draft; cancel preserves",
+      "passed": true
+    },
+    {
+      "name": "C12-C13-C15 collection checkbox, display round-trip and same draft",
+      "passed": true
+    },
+    {
+      "name": "C10 left/right tables and exact composite sample join; no blank matching",
+      "passed": true
+    },
+    {
+      "name": "C17 shared payload excludes private fields and invalid form is rejected",
+      "passed": true
+    },
+    {
+      "name": "C17 conflict defaults keep current; cancel/no selection changes nothing",
+      "passed": true
+    },
+    {
+      "name": "C17 selected apply saved history and real in-memory restore",
+      "passed": true
+    },
+    {
+      "name": "C17 settings close discards shared draft and history",
+      "passed": true
+    },
+    {
+      "name": "C14 trash/backup co-located; backup preview cancel and confirmed sample restore",
+      "passed": true
+    },
+    {
+      "name": "Changed same-key records remain visible under independent duplicate options",
+      "passed": true
+    },
+    {
+      "name": "Original variant and item details remain available",
+      "passed": true
+    },
+    {
+      "name": "Narrow settings/sidebar/remote fit with no page overflow",
+      "passed": true
+    },
+    {
+      "name": "Review regressions: mapping changes lock old candidates; exact types and reverse 1:1 conflicts",
+      "passed": true
+    },
+    {
+      "name": "Review regressions: old share preview rejects changed draft; empty rules and unique bounded history",
+      "passed": true
+    },
+    {
+      "name": "Review regressions: quick detail clears draft only on save; calendar moves a day/week; remote reopens",
+      "passed": true
+    },
+    {
+      "name": "C18 filter label and semantics preserve search and source precision",
+      "passed": true
+    },
+    {
+      "name": "C19 properties classification tabs, direct shared flags and user-column add/cancel",
+      "passed": false,
+      "error": "TimeoutError: locator.click: Timeout 4000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('#f45CancelUser')\u001b[22m\n\u001b[2m    - locator resolved to <button type=\"button\" id=\"f45CancelUser\">취소</button>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - element is outside of the viewport\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - element is outside of the viewport\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    8 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - element is outside of the viewport\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 500ms\u001b[22m\n"
+    }
+  ],
+  "pageErrors": [],
+  "consoleErrors": [],
+  "externalRequests": [],
+  "status": "failed",
+  "error": "TimeoutError: locator.click: Timeout 4000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('#f45CancelUser')\u001b[22m\n\u001b[2m    - locator resolved to <button type=\"button\" id=\"f45CancelUser\">취소</button>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - element is outside of the viewport\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - element is outside of the viewport\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    8 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - element is outside of the viewport\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 500ms\u001b[22m\n",
+  "layout": [
+    {
+      "key": "",
+      "height": 25,
+      "width": 48,
+      "html": "<button class=\"rownobutton\" id=\"properties\" aria-label=\"표 속성\">속성</button>",
+      "children": [
+        {
+          "tag": "BUTTON",
+          "height": 17,
+          "css": {
+            "display": "block",
+            "lineHeight": "17px",
+            "minHeight": "0px",
+            "width": "30px",
+            "whiteSpace": "nowrap"
+          }
+        }
+      ]
+    },
+    {
+      "key": "ctrtNo",
+      "height": 25,
+      "width": 150,
+      "html": "<span class=\"header-label\">계약번호</span><button class=\"header-filter\" data-filter=\"ctrtNo\" aria-label=\"계약번호 열 필터\">▽</button>",
+      "children": [
+        {
+          "tag": "SPAN",
+          "height": 16,
+          "css": {
+            "display": "inline",
+            "lineHeight": "17px",
+            "minHeight": "0px",
+            "width": "auto",
+            "whiteSpace": "nowrap"
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "height": 17,
+          "css": {
+            "display": "block",
+            "lineHeight": "17px",
+            "minHeight": "0px",
+            "width": "10px",
+            "whiteSpace": "nowrap"
+          }
+        }
+      ]
+    },
+    {
+      "key": "ctrtChgOrd",
+      "height": 25,
+      "width": 110,
+      "html": "<span class=\"header-label\">계약차수</span><button class=\"header-filter\" data-filter=\"ctrtChgOrd\" aria-label=\"계약차수 열 필터\">▽</button>",
+      "children": [
+        {
+          "tag": "SPAN",
+          "height": 16,
+          "css": {
+            "display": "inline",
+            "lineHeight": "17px",
+            "minHeight": "0px",
+            "width": "auto",
+            "whiteSpace": "nowrap"
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "height": 17,
+          "css": {
+            "display": "block",
+            "lineHeight": "17px",
+            "minHeight": "0px",
+            "width": "10px",
+            "whiteSpace": "nowrap"
+          }
+        }
+      ]
+    },
+    {
+      "key": "ctrtNm",
+      "height": 25,
+      "width": 210,
+      "html": "<span class=\"header-label\">계약건명</span><button class=\"header-filter\" data-filter=\"ctrtNm\" aria-label=\"계약건명 열 필터\">▽</button>",
+      "children": [
+        {
+          "tag": "SPAN",
+          "height": 16,
+          "css": {
+            "display": "inline",
+            "lineHeight": "17px",
+            "minHeight": "0px",
+            "width": "auto",
+            "whiteSpace": "nowrap"
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "height": 17,
+          "css": {
+            "display": "block",
+            "lineHeight": "17px",
+            "minHeight": "0px",
+            "width": "10px",
+            "whiteSpace": "nowrap"
+          }
+        }
+      ]
+    },
+    {
+      "key": "ctrtAmt",
+      "height": 25,
+      "width": 110,
+      "html": "<span class=\"header-label\">계약금액</span><button class=\"header-filter\" data-filter=\"ctrtAmt\" aria-label=\"계약금액 열 필터\">▽</button>",
+      "children": [
+        {
+          "tag": "SPAN",
+          "height": 16,
+          "css": {
+            "display": "inline",
+            "lineHeight": "17px",
+            "minHeight": "0px",
+            "width": "auto",
+            "whiteSpace": "nowrap"
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "height": 17,
+          "css": {
+            "display": "block",
+            "lineHeight": "17px",
+            "minHeight": "0px",
+            "width": "10px",
+            "whiteSpace": "nowrap"
+          }
+        }
+      ]
+    },
+    {
+      "key": "dmstUntyGrpNm",
+      "height": 25,
+      "width": 210,
+      "html": "<span class=\"header-label\">수요기관명</span><button class=\"header-filter\" data-filter=\"dmstUntyGrpNm\" aria-label=\"수요기관명 열 필터\">▽</button>",
+      "children": [
+        {
+          "tag": "SPAN",
+          "height": 16,
+          "css": {
+            "display": "inline",
+            "lineHeight": "17px",
+            "minHeight": "0px",
+            "width": "auto",
+            "whiteSpace": "nowrap"
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "height": 17,
+          "css": {
+            "display": "block",
+            "lineHeight": "17px",
+            "minHeight": "0px",
+            "width": "10px",
+            "whiteSpace": "nowrap"
+          }
+        }
+      ]
+    },
+    {
+      "key": "ctrtDt",
+      "height": 25,
+      "width": 110,
+      "html": "<span class=\"header-label\">계약일자</span><button class=\"header-filter\" data-filter=\"ctrtDt\" aria-label=\"계약일자 열 필터\">▽</button>",
+      "children": [
+        {
+          "tag": "SPAN",
+          "height": 16,
+          "css": {
+            "display": "inline",
+            "lineHeight": "17px",
+            "minHeight": "0px",
+            "width": "auto",
+            "whiteSpace": "nowrap"
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "height": 17,
+          "css": {
+            "display": "block",
+            "lineHeight": "17px",
+            "minHeight": "0px",
+            "width": "10px",
+            "whiteSpace": "nowrap"
+          }
+        }
+      ]
+    },
+    {
+      "key": "ctrtPgstNm",
+      "height": 25,
+      "width": 210,
+      "html": "<span class=\"header-label\">계약상태</span><button class=\"header-filter\" data-filter=\"ctrtPgstNm\" aria-label=\"계약상태 열 필터\">▽</button>",
+      "children": [
+        {
+          "tag": "SPAN",
+          "height": 16,
+          "css": {
+            "display": "inline",
+            "lineHeight": "17px",
+            "minHeight": "0px",
+            "width": "auto",
+            "whiteSpace": "nowrap"
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "height": 17,
+          "css": {
+            "display": "block",
+            "lineHeight": "17px",
+            "minHeight": "0px",
+            "width": "10px",
+            "whiteSpace": "nowrap"
+          }
+        }
+      ]
+    },
+    {
+      "key": "ctrtDmndRcptNo",
+      "height": 25,
+      "width": 150,
+      "html": "<span class=\"header-label\">접수번호</span><button class=\"header-filter\" data-filter=\"ctrtDmndRcptNo\" aria-label=\"접수번호 열 필터\">▽</button>",
+      "children": [
+        {
+          "tag": "SPAN",
+          "height": 16,
+          "css": {
+            "display": "inline",
+            "lineHeight": "17px",
+            "minHeight": "0px",
+            "width": "auto",
+            "whiteSpace": "nowrap"
+          }
+        },
+        {
+          "tag": "BUTTON",
+          "height": 17,
+          "css": {
+            "display": "block",
+            "lineHeight": "17px",
+            "minHeight": "0px",
+            "width": "10px",
+            "whiteSpace": "nowrap"
+          }
+        }
+      ]
+    }
+  ]
+}

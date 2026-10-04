@@ -1,0 +1,124 @@
+{
+  "phase": "after",
+  "sha256": "3768e54e7d9124de0fc862893f4a170613f17a6f065cea2dff808419c839441f",
+  "verifierSha256": "26689568f3241fa78743cfc441c8e1800a82aa4d087869bafedb4fbec2d7b497",
+  "run": "evidence/runs/2026-10-04T13-34-50-097Z",
+  "checks": [
+    {
+      "name": "Preserved source schema, original controls and independent new file",
+      "passed": true
+    },
+    {
+      "name": "C01 display hides fractions without rounding or losing raw precision",
+      "passed": true
+    },
+    {
+      "name": "C02-C03 dense header/rows and actual product SVG",
+      "passed": true
+    },
+    {
+      "name": "C04-C09 sidebar top actions and quick/body-only screen memo",
+      "passed": true
+    },
+    {
+      "name": "C08 fixed memo visible on matching screen and hidden on other screen",
+      "passed": true
+    },
+    {
+      "name": "C05-C06 manager scope inline, title fallback, detail cancel and period validation",
+      "passed": true
+    },
+    {
+      "name": "C06 monthly/week/day calendar and range schedule selection",
+      "passed": true
+    },
+    {
+      "name": "C07 remote schedule below button with selected business context",
+      "passed": true
+    },
+    {
+      "name": "C16 launcher button and hotkey share execution; input/modal suppress hotkeys",
+      "passed": true
+    },
+    {
+      "name": "C11 right-click source key opens composite business-key draft; cancel preserves",
+      "passed": true
+    },
+    {
+      "name": "C12-C13-C15 collection checkbox, display round-trip and same draft",
+      "passed": true
+    },
+    {
+      "name": "C10 left/right tables and exact composite sample join; no blank matching",
+      "passed": true
+    },
+    {
+      "name": "C17 shared payload excludes private fields and invalid form is rejected",
+      "passed": true
+    },
+    {
+      "name": "C17 conflict defaults keep current; cancel/no selection changes nothing",
+      "passed": true
+    },
+    {
+      "name": "C17 selected apply saved history and real in-memory restore",
+      "passed": true
+    },
+    {
+      "name": "C17 settings close discards shared draft and history",
+      "passed": true
+    },
+    {
+      "name": "C14 trash/backup co-located; backup preview cancel and confirmed sample restore",
+      "passed": true
+    },
+    {
+      "name": "Changed same-key records remain visible under independent duplicate options",
+      "passed": true
+    },
+    {
+      "name": "Original variant and item details remain available",
+      "passed": true
+    },
+    {
+      "name": "Narrow settings/sidebar/remote fit with no page overflow",
+      "passed": true
+    },
+    {
+      "name": "Review regressions: mapping changes lock old candidates; exact types and reverse 1:1 conflicts",
+      "passed": true
+    },
+    {
+      "name": "Review regressions: old share preview rejects changed draft; empty rules and unique bounded history",
+      "passed": true
+    },
+    {
+      "name": "Review regressions: quick detail clears draft only on save; calendar moves a day/week; remote reopens",
+      "passed": true
+    },
+    {
+      "name": "C18 filter label and semantics preserve search and source precision",
+      "passed": true
+    },
+    {
+      "name": "C19 properties classification tabs, direct shared flags and user-column add/cancel",
+      "passed": true
+    },
+    {
+      "name": "C11 expanded source business-key survives another checkbox change",
+      "passed": true
+    },
+    {
+      "name": "C20 legacy metadata, cancel, completion filters, period and Eisenhower views",
+      "passed": true
+    },
+    {
+      "name": "Fresh reload resets sample edits and preserves zero browser errors",
+      "passed": true
+    }
+  ],
+  "pageErrors": [],
+  "consoleErrors": [],
+  "externalRequests": [],
+  "status": "passed"
+}

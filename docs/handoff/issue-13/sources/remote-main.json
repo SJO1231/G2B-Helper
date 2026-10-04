@@ -1,0 +1,17 @@
+{
+  "sourceKind": "actual GitHub connector GET read",
+  "endpoint": "https://api.github.com/repos/SJO1231/G2B-Helper/git/ref/heads/main",
+  "scope": "worktree-start remote main check",
+  "observation": "Parent directly received this API response before worktree creation; independent verifier subsequently repeated the live GET and confirmed the same SHA. This is not a remote-tracking assumption; initial timing precision remains unrecorded.",
+  "queriedDuring": "Initial N13-H1 pre-worktree inspection, 2026-10-05 KST; exact API wall-clock was not separately captured",
+  "response": {
+    "ref": "refs/heads/main",
+    "node_id": "REF_kwDOU3GCVK9yZWZzL2hlYWRzL21haW4",
+    "url": "https://api.github.com/repos/SJO1231/G2B-Helper/git/refs/heads/main",
+    "object": {
+      "sha": "ae56ddd874eda0cf62c15dbea9f208c6551fe624",
+      "type": "commit",
+      "url": "https://api.github.com/repos/SJO1231/G2B-Helper/git/commits/ae56ddd874eda0cf62c15dbea9f208c6551fe624"
+    }
+  }
+}

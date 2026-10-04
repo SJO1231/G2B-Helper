@@ -1,0 +1,177 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import {fileURLToPath,pathToFileURL} from 'node:url';
+import {createHash} from 'node:crypto';
+import {chromium,expect} from '@playwright/test';
+const dir=path.dirname(fileURLToPath(import.meta.url)),before=process.argv.includes('--before'),file=path.join(dir,before?'before/index.html':'index.html');
+const evidence=path.join(dir,'evidence'),out=path.join(evidence,'runs',new Date().toISOString().replaceAll(/[:.]/g,'-'));await fs.mkdir(out,{recursive:true});
+const html=await fs.readFile(file,'utf8'),report={phase:before?'before':'after',sha256:createHash('sha256').update(html).digest('hex'),verifierSha256:createHash('sha256').update(await fs.readFile(fileURLToPath(import.meta.url))).digest('hex'),run:path.relative(dir,out).replaceAll('\\','/'),checks:[],pageErrors:[],consoleErrors:[],externalRequests:[]};
+const browser=await chromium.launch({executablePath:'C:/Program Files/Google/Chrome/Application/chrome.exe',headless:true});
+const page=await browser.newPage({viewport:{width:1439,height:1244}});page.setDefaultTimeout(4000);
+page.on('pageerror',e=>report.pageErrors.push(String(e)));page.on('console',m=>{if(m.type()==='error')report.consoleErrors.push(m.text())});page.on('request',r=>{if(/^https?:/.test(r.url()))report.externalRequests.push(r.url())});
+const check=async(name,fn)=>{try{await fn();report.checks.push({name,passed:true});console.log('PASS '+name);}catch(error){report.checks.push({name,passed:false,error:String(error)});throw error;}};
+const shot=name=>page.screenshot({path:path.join(out,name+'.png'),fullPage:true});
+const settings=()=>page.locator('#settings'),open=async()=>{await page.locator('#openSettings').click();await expect(settings()).toBeVisible();};
+const tab=id=>page.locator('#settingsMainTabs [data-settings-main="'+id+'"]').click();
+const sub=id=>settings().locator('[data-setting="'+id+'"]').click();
+const save=()=>settings().locator('#saveSettings').click(),cancel=()=>settings().locator('[data-close="settings"]').click();
+const mode=id=>page.locator('[data-mode="'+id+'"]').click();
+const reload=()=>page.goto(pathToFileURL(file).href+(before?'#proposal':''));
+try{
+ await reload();
+ if(before){
+  await mode('db');
+  const observations=await page.evaluate(()=>({decimalVisible:document.querySelector('[data-field="ctrtAmt"][title="9007199254740993.25"]')?.textContent,headerHeight:document.querySelector('#grid th')?.getBoundingClientRect().height,settingsIcon:document.querySelector('#openSettings svg')?.getAttribute('viewBox'),screenMemos:!!document.querySelector('#screenMemos'),remote:!!document.querySelector('#sampleRemote')}));
+  report.observations=observations;report.status='observed-before-fix';await shot('before-01-db');
+  await open();await tab('shortcuts');await shot('before-02-shortcuts');await cancel();
+  console.log(JSON.stringify(observations));
+ }else{
+ await check('Preserved source schema, original controls and independent new file',async()=>{
+  assert.ok(!/\b(?:fetch|XMLHttpRequest|WebSocket|indexedDB|localStorage|sessionStorage)\s*[.(]/.test(html));
+  assert.deepEqual(await page.locator('.export-actions button').allTextContents(),['원본 JSON','JSON','CSV','Excel','생성','저장']);
+  assert.equal(await page.evaluate(()=>sourceSchemas.contract.tables[stages.contract.tableId].length),61);
+  assert.equal(await page.evaluate(()=>sourceSchemas.bid.tables[stages.bid.tableId].length),40);
+  assert.equal(await page.evaluate(()=>Object.values(sourceSchemas.receipt.tables).filter(x=>x.length===37).length),2);
+  assert.equal(await page.evaluate(()=>stages.contract.itemColumns.length),195);
+  await expect(page.locator('#saveRows')).toBeDisabled();
+ });
+ await mode('db');
+ await check('C01 display hides fractions without rounding or losing raw precision',async()=>{
+  const cell=page.locator('#grid td[data-field="ctrtAmt"][title="9007199254740993.25"]');await expect(cell).toHaveText('9,007,199,254,740,993');
+  assert.equal(await page.evaluate(()=>samples.contract.find(r=>r.fields.ctrtAmt==='9007199254740993.25').fields.ctrtAmt),'9007199254740993.25');
+  await page.locator('#rawJson').click();await expect(page.locator('#informationBody')).toContainText('9007199254740993.25');await page.locator('#information [data-close]').click();
+ });
+ await check('C02-C03 dense header/rows and actual product SVG',async()=>{
+  assert.equal(await page.locator('#grid th').first().evaluate(e=>e.getBoundingClientRect().height),25);
+  assert.equal(await page.locator('#grid tbody tr').first().evaluate(e=>e.getBoundingClientRect().height),24);
+  await expect(page.locator('#openSettings svg')).toHaveAttribute('viewBox','0 0 16 16');
+  assert.match(await page.locator('#openSettings path').getAttribute('d'),/^M8 1\.5v2/);
+ });await shot('01-db-screen-note');
+ await check('C04-C09 sidebar top actions and quick/body-only screen memo',async()=>{
+  await page.locator('#toggleSidebar').click();
+  const locations=await page.locator('#sidebar').evaluate(e=>({actions:e.querySelector('.side-actions').getBoundingClientRect().top,body:e.querySelector('.sidebar-body').getBoundingClientRect().top}));assert.ok(locations.actions<locations.body);
+  await page.locator('#quickNote').click();await page.locator('#quickBody').fill('빠른 화면 메모\n물품 수량 확인');await page.locator('#quickScope').selectOption('screen');await page.locator('#quickCompose button[type="submit"]').click();
+  await expect(page.locator('#screenMemos')).toContainText('빠른 화면 메모');await expect(page.locator('#editor')).not.toBeVisible();
+  await page.locator('#quickNote').click();await page.locator('#quickBody').fill('취소할 메모');await page.locator('#quickCancel').click();await expect(page.locator('#screenMemos')).not.toContainText('취소할 메모');
+  await shot('02-sidebar-quick');await page.locator('#closeSidebar').click();
+ });
+ await check('C08 fixed memo visible on matching screen and hidden on other screen',async()=>{
+  await expect(page.locator('#screenMemos')).toContainText('계약 목록 확인 순서');await page.locator('#sampleStage').selectOption('receipt');await expect(page.locator('#screenMemos')).not.toContainText('계약 목록 확인 순서');await expect(page.locator('#screenMemos')).toContainText('접수 물품 확인');await page.locator('#sampleStage').selectOption('contract');
+ });
+ await check('C05-C06 manager scope inline, title fallback, detail cancel and period validation',async()=>{
+  await page.locator('#toggleSidebar').click();await page.locator('#manageAll').click();
+  await expect(page.locator('#managerList .manager-row > .badge')).toHaveCount(0);await expect(page.locator('#managerList .note-meta').first()).toContainText(/화면고정|업무고정|일반/);
+  await page.locator('#managerAdd').click();await page.locator('#editContent').fill('제목 없이 만드는 메모');await page.locator('#editForm button[type="submit"]').click();await expect(page.locator('#managerList')).toContainText('제목 없이 만드는 메모');
+  const count=await page.evaluate(()=>notes.length);await page.locator('#managerAdd').click();await page.locator('#editContent').fill('상세 취소 메모');await page.locator('#editor button[data-close="editor"]').filter({hasText:'취소'}).click();assert.equal(await page.evaluate(()=>notes.length),count);
+  await page.locator('#manager [data-manager="schedule"]').click();await page.locator('#managerAdd').click();await page.locator('#editContent').fill('기간 샘플');await page.locator('#editDate').fill('2026-10-12');await page.locator('#editEnd').fill('2026-10-11');await page.locator('#editForm button[type="submit"]').click();await expect(page.locator('#editStatus')).toContainText('종료일');await page.locator('#editor button[data-close="editor"]').filter({hasText:'취소'}).click();
+ });
+ await check('C06 monthly/week/day calendar and range schedule selection',async()=>{
+  await page.locator('#calendarToggle').click();await expect(page.locator('#calendarGrid [data-calendar-date]')).toHaveCount(42);
+  await page.locator('#calendarGrid [data-calendar-date="2026-10-09"]').click({position:{x:4,y:4}});await expect(page.locator('#managerList')).toContainText('납품기한 검토');
+  await page.locator('#calendarMode').selectOption('week');await expect(page.locator('#calendarGrid [data-calendar-date]')).toHaveCount(7);await page.locator('#calendarMode').selectOption('day');await expect(page.locator('#calendarGrid [data-calendar-date]')).toHaveCount(1);
+  await page.locator('#calendarAdd').click();await expect(page.locator('#editDate')).toHaveValue('2026-10-09');await page.locator('#editor button[data-close="editor"]').filter({hasText:'취소'}).click();await page.locator('#calendarMode').selectOption('month');await shot('03-calendar');await page.locator('#manager [data-close="manager"]').filter({hasText:'닫기'}).click();await page.locator('#closeSidebar').click();
+ });
+ await check('C07 remote schedule below button with selected business context',async()=>{
+  assert.equal(await page.locator('#remoteLaunchers').evaluate(e=>getComputedStyle(e).gridTemplateColumns.split(' ').length),4);
+  await page.locator('#grid [data-row="contract-0"]').click();await page.locator('#remoteNotes').click();await expect(page.locator('#remoteEvents')).toContainText('납품기한 검토');
+  const locations=await page.locator('#sampleRemote').evaluate(e=>({button:e.querySelector('#remoteNotes').getBoundingClientRect().bottom,schedule:e.querySelector('#remoteSchedule').getBoundingClientRect().top}));assert.ok(locations.schedule>=locations.button);await shot('04-remote-schedule');
+ });
+ await check('C16 launcher button and hotkey share execution; input/modal suppress hotkeys',async()=>{
+  await page.locator('#remoteLaunchers [data-launcher="l1"]').click();await expect(page.locator('#remoteState')).toContainText('계약 확인');await page.locator('#remoteState').evaluate(e=>e.textContent='대기');await page.locator('body').click({position:{x:4,y:3}});await page.keyboard.press('Control+Shift+1');await expect(page.locator('#remoteState')).toContainText('계약 확인');await expect(page.locator('#editor')).not.toBeVisible();
+  await page.locator('#remoteState').evaluate(e=>e.textContent='입력 중');await page.locator('#search').focus();await page.keyboard.press('Control+Shift+1');await expect(page.locator('#remoteState')).toHaveText('입력 중');
+  await open();await tab('shortcuts');await expect(settings().locator('input[data-launcher-key]')).toHaveCount(2);await page.locator('#addLauncherButton').click();await expect(settings().locator('input[data-launcher-key]')).toHaveCount(3);
+  await settings().locator('[data-launcher-name="2"]').fill('세 번째 버튼');await settings().locator('[data-launcher-key="2"]').press('Control+Shift+3');await save();await expect(page.locator('#remoteLaunchers')).toContainText('세 번째 버튼');await page.locator('body').click({position:{x:4,y:3}});await page.keyboard.press('Control+Shift+3');await expect(page.locator('#remoteState')).toContainText('세 번째 버튼');
+ });
+ await check('C11 right-click source key opens composite business-key draft; cancel preserves',async()=>{
+  await page.locator('#grid th[title="ctrtNm"]').click({button:'right'});await expect(page.locator('#keyContext')).toBeVisible();await page.locator('#keyToggle').click();await expect(settings().locator('[data-key="ctrtNm"]')).toBeChecked();await cancel();assert.deepEqual(await page.evaluate(()=>config.contract.keys),['ctrtNo','ctrtChgOrd']);
+  await page.locator('#grid th[title="ctrtNm"]').click({button:'right'});await page.locator('#keyToggle').click();await save();assert.ok(await page.evaluate(()=>config.contract.keys.includes('ctrtNm')));
+ });
+ await check('C12-C13-C15 collection checkbox, display round-trip and same draft',async()=>{
+  await open();await page.locator('#draftHideScreen').uncheck();await page.locator('[data-settings-jump="table"]').click();await expect(page.locator('#draftHideScreen')).not.toBeChecked();await expect(page.locator('#registered').locator('..')).toContainText('이 표를 수집 대상에 포함');
+  const sizes=await page.locator('#registered').evaluate(e=>({checkbox:e.getBoundingClientRect().width,label:e.parentElement.getBoundingClientRect().width}));assert.ok(sizes.checkbox<25);assert.ok(sizes.label>sizes.checkbox);
+  await page.locator('[data-settings-jump="screen"]').click();await expect(page.locator('#screenName')).toHaveValue('계약관리 목록');await page.locator('[data-settings-jump="table"]').click();await expect(page.locator('#draftHideScreen')).not.toBeChecked();await settings().locator('[data-settings-main="general"]').first().click();await expect(page.locator('#draftHideScreen')).not.toBeChecked();await cancel();assert.equal(await page.evaluate(()=>state.hideScreen),true);
+ });
+ await check('C10 left/right tables and exact composite sample join; no blank matching',async()=>{
+  await open();await tab('collection');await sub('relation');await expect(page.locator('#joinRight')).toHaveValue('bidItems');await expect(page.locator('#joinResult')).toContainText('01');
+  const r=await page.evaluate(()=>{const relation=draft.relations[0],rows=joinRows(relation);return {mixed:rows.some(x=>x.b&&x.a.ctrtDmndRcptOrd!==x.b.ctrtDmndRcptOrd),multi:rows.filter(x=>x.b&&x.a.ctrtDmndRcptOrd==='01').length,missing:rows.some(x=>!x.b)};});assert.equal(r.mixed,false);assert.ok(r.multi>=2);assert.equal(r.missing,true);
+  await page.locator('#relationKind').selectOption('1:1');await expect(page.locator('#joinResult')).toContainText('확정 불가');await page.locator('#relationKind').selectOption('1:N');await page.locator('#joinMode').selectOption('inner');await expect(page.locator('#joinResult')).not.toContainText('대상 없음');await shot('05-relations');await cancel();
+ });
+ await check('C17 shared payload excludes private fields and invalid form is rejected',async()=>{
+  await open();await tab('shared');await page.locator('#previewShareExport').click();const value=await page.locator('#informationBody pre').textContent(),payload=JSON.parse(value);assert.deepEqual(Object.keys(payload.settings).sort(),['dictionary','rules','values']);assert.ok(!value.includes('launchers')&&!value.includes('shortcuts')&&!value.includes('sample-contract'));await page.locator('#information [data-close]').click();
+  const failures=await page.evaluate(()=>{const a=shareSample(),b=shareSample();a.schemaVersion=999;b.settings.launchers=[];return [a,b].map(x=>{try{validateShared(x);return false;}catch{return true;}});});assert.deepEqual(failures,[true,true]);
+ });
+ await check('C17 conflict defaults keep current; cancel/no selection changes nothing',async()=>{
+  const prior=await page.evaluate(()=>JSON.stringify(sharedSnapshot(draft.original)));await page.locator('#previewShareSample').click();await page.locator('#applySharePlan').click();await expect(page.locator('#sharePlanStatus')).toContainText('현재 값을 유지');assert.equal(await page.evaluate(()=>JSON.stringify(sharedSnapshot(draft.original))),prior);
+  await page.locator('#cancelSharePlan').click();assert.equal(await page.evaluate(()=>JSON.stringify(sharedSnapshot(draft.original))),prior);
+ });
+ await check('C17 selected apply saved history and real in-memory restore',async()=>{
+  const originalLabel=await page.evaluate(()=>originalSettings.dictionary.find(x=>x.key==='ctrtNo').label);await page.locator('#previewShareSample').click();await page.locator('[data-share-choice]').first().selectOption('incoming');await page.locator('#applySharePlan').click();await expect(page.locator('[data-restore-share]')).toHaveCount(1);await shot('06-shared-history');await save();assert.equal(await page.evaluate(()=>originalSettings.dictionary.find(x=>x.key==='ctrtNo').label),'계약 식별번호');
+  await open();await tab('shared');await page.locator('[data-restore-share]').first().click();await page.locator('[data-share-choice]').first().selectOption('incoming');await page.locator('#applySharePlan').click();await save();assert.equal(await page.evaluate(()=>originalSettings.dictionary.find(x=>x.key==='ctrtNo').label),originalLabel);
+ });
+ await check('C17 settings close discards shared draft and history',async()=>{
+  const before=await page.evaluate(()=>JSON.stringify(originalSettings));await open();await tab('shared');await page.locator('#previewShareSample').click();await page.locator('[data-share-choice]').first().selectOption('incoming');await page.locator('#applySharePlan').click();await cancel();assert.equal(await page.evaluate(()=>JSON.stringify(originalSettings)),before);
+ });
+ await check('C14 trash/backup co-located; backup preview cancel and confirmed sample restore',async()=>{
+  await open();await tab('data');await expect(settings()).toContainText('휴지통');await page.locator('#createMemoryBackup').click();const count=await page.evaluate(()=>notes.length);
+  await page.locator('[data-restore-note="trash-example"]').click();assert.equal(await page.evaluate(()=>notes.length),count+1);await page.locator('[data-preview-backup="0"]').click();await page.locator('#cancelMemoryRestore').click();assert.equal(await page.evaluate(()=>notes.length),count+1);
+  await page.locator('[data-preview-backup="0"]').click();await page.locator('#confirmMemoryRestore').click();assert.equal(await page.evaluate(()=>notes.length),count);assert.equal(await page.evaluate(()=>memoryBackups.length),1);await shot('07-data-management');await cancel();
+ });
+ await check('Changed same-key records remain visible under independent duplicate options',async()=>{
+  await mode('result');const changed=await page.locator('#grid [data-row="contract-2"]').count();assert.equal(changed,1);await open();await page.locator('#draftHideScreen').uncheck();await page.locator('#draftHideDb').uncheck();await save();await expect(page.locator('#grid tbody tr')).toHaveCount(9);await expect(page.locator('#counts')).toContainText('중복 숨김 0건');
+ });
+ await check('Original variant and item details remain available',async()=>{
+  await page.locator('#variant').selectOption('original');await expect(page.locator('#sampleRemote')).toBeHidden();await expect(page.locator('#toggleSidebar')).toBeHidden();await expect(page.locator('#saveRows')).toBeDisabled();await mode('db');await page.locator('#grid [data-items]').first().click();assert.equal(await page.locator('#itemGrid th').count(),196);await expect(page.locator('#itemGrid')).toContainText('000');await page.locator('#items [data-close="items"]').filter({hasText:'닫기'}).click();await page.locator('#variant').selectOption('proposal');
+ });
+ await check('Narrow settings/sidebar/remote fit with no page overflow',async()=>{
+  await page.setViewportSize({width:375,height:812});await page.locator('#toggleSidebar').click();await shot('08-sidebar-narrow');await page.locator('#closeSidebar').click();await open();await tab('collection');await sub('table');assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await shot('09-settings-narrow');await sub('relation');await shot('10-relations-narrow');await cancel();
+  const boxes=await page.locator('#sampleRemote').boundingBox();assert.ok(boxes.x>=0&&boxes.x+boxes.width<=375);await shot('11-remote-narrow');
+ });
+ await check('Review regressions: mapping changes lock old candidates; exact types and reverse 1:1 conflicts',async()=>{
+  await page.setViewportSize({width:1439,height:950});await reload();await open();await tab('collection');await sub('relation');
+  await page.locator('#relationKind').selectOption('1:1');assert.ok(await page.locator('[data-relation]:enabled').count()===0);await expect(page.locator('#relationStale')).toBeVisible();
+  await page.locator('#relationKind').selectOption('1:N');await page.locator('[data-pair="1"][data-pair-side="1"]').selectOption('bidPbancOrd');assert.equal(await page.locator('[data-relation]:enabled').count(),0);await cancel();
+  const result=await page.evaluate(()=>{joinTables.testLeft={fields:['k'],rows:[{k:'001'},{k:'001'},{k:0},{k:false},{k:''},{k:null}]};joinTables.testRight={fields:['k'],rows:[{k:'001'},{k:0},{k:false},{k:''},{k:null}]};const rows=joinRows({leftTable:'testLeft',rightTable:'testRight',pairs:[['k','k']],kind:'1:1',joinMode:'left'});delete joinTables.testLeft;delete joinTables.testRight;return {conflicts:rows.filter(x=>x.status.includes('충돌')).length,wrong:rows.some(x=>x.b&&typeof x.a.k!==typeof x.b.k),blank:rows.filter(x=>x.a.k===''||x.a.k===null).every(x=>x.b===null),zero:rows.find(x=>x.a.k===0)?.b?.k};});assert.deepEqual(result,{conflicts:2,wrong:false,blank:true,zero:0});
+ });
+ await check('Review regressions: old share preview rejects changed draft; empty rules and unique bounded history',async()=>{
+  await open();await tab('shared');await page.locator('#previewShareSample').click();await page.locator('[data-share-choice]').first().selectOption('incoming');
+  await tab('dictionary');const index=await page.evaluate(()=>draft.original.dictionary.findIndex(x=>x.key==='ctrtNo'));await page.locator('[data-dict-kind="dictionary"][data-dict-index="'+index+'"][data-dict-field="label"]').fill('이후 작성한 표시명');await tab('shared');await page.locator('#applySharePlan').click();await expect(page.locator('#settingsHint')).toContainText('다시 확인');assert.equal(await page.evaluate(()=>draft.original.dictionary.find(x=>x.key==='ctrtNo').label),'이후 작성한 표시명');
+  assert.equal(await page.evaluate(()=>{const rules=draft.original.rules;draft.original.rules=[];try{return validateShared(shareSample()).settings.rules.length;}finally{draft.original.rules=rules;}}),1);
+  for(let i=0;i<12;i++){await page.evaluate(i=>{const before=sharedSnapshot(draft.original),incoming=structuredClone(before);incoming.dictionary.find(x=>x.key==='ctrtNo').label='반복 적용 '+i;sharePlan={title:'공유 샘플 '+i,before,diffs:sharedDiff(before,incoming),restore:false};renderSettings();},i);await page.locator('[data-share-choice]').first().selectOption('incoming');await page.locator('#applySharePlan').click();}
+  const ids=await page.locator('[data-restore-share]').evaluateAll(nodes=>nodes.map(n=>n.dataset.restoreShare));assert.equal(ids.length,10);assert.equal(new Set(ids).size,10);await cancel();
+ });
+ await check('Review regressions: quick detail clears draft only on save; calendar moves a day/week; remote reopens',async()=>{
+  await page.locator('#toggleSidebar').click();await page.locator('#quickNote').click();await page.locator('#quickBody').fill('상세로 이어 쓴 빠른 메모');await page.locator('#quickDetail').click();await page.locator('#editForm button[type="submit"]').click();await expect(page.locator('#quickCompose')).toBeHidden();await expect(page.locator('#quickBody')).toHaveValue('');
+  await page.locator('#quickNote').click();await page.locator('#quickBody').fill('상세 취소 초안');await page.locator('#quickDetail').click();await page.locator('#editor button[data-close="editor"]').filter({hasText:'취소'}).click();await expect(page.locator('#quickBody')).toHaveValue('상세 취소 초안');await page.locator('#quickCancel').click();await page.locator('#closeSidebar').click();
+  await page.locator('#remoteNotes').click();await page.locator('#remoteCalendar').click();await page.locator('#calendarMode').selectOption('day');await page.locator('#monthNext').click();assert.equal(await page.evaluate(()=>calendarFocus),'2026-10-09');await page.locator('#calendarMode').selectOption('week');await page.locator('#monthNext').click();assert.equal(await page.evaluate(()=>calendarFocus),'2026-10-16');await page.locator('#manager [data-close="manager"]').filter({hasText:'닫기'}).click();await page.locator('#remoteCalendar').click();assert.equal(await page.evaluate(()=>calendarFilter),'');await page.locator('#manager [data-close="manager"]').filter({hasText:'닫기'}).click();
+  await page.locator('#remoteClose').click();await expect(page.locator('#sampleRemote')).toBeHidden();await page.locator('#showRemote').click();await expect(page.locator('#sampleRemote')).toBeVisible();
+ });
+ await check('C18 filter label and semantics preserve search and source precision',async()=>{
+  await expect(page.locator('#resetFilters')).toHaveText('필터 해제');await page.locator('#search').fill('교육');await page.locator('#grid [data-filter="ctrtNm"]').click();await page.locator('#columnTerm').fill('장비');await page.locator('#applyColumn').click();await page.locator('#resetFilters').click();await expect(page.locator('#search')).toHaveValue('교육');assert.deepEqual(await page.evaluate(()=>state.columnFilters),{});await page.locator('#search').fill('');
+ });
+ await check('C19 properties classification tabs, direct shared flags and user-column add/cancel',async()=>{
+  await reload();await mode('db');const raw=await page.evaluate(()=>JSON.stringify(samples.contract.map(r=>r.fields)));await page.locator('#properties').click();
+  await expect(page.locator('#f45ColumnTab')).toHaveText('열 분류');await expect(page.locator('#f45TableTab')).toHaveText('테이블 분류');await expect(page.locator('[data-f45-column-group]')).toHaveCount(4);
+  await page.locator('[data-f45-display-flag="hideEmptyColumns"]').uncheck();assert.equal(await page.evaluate(()=>originalSettings.hideEmptyColumns),false);assert.ok(await page.locator('[data-f45-display-flag="hideEmptyColumns"]').evaluate(e=>{const text=[...e.parentNode.childNodes].find(n=>n.nodeType===3&&n.textContent.trim());const range=document.createRange();range.selectNodeContents(text);return range.getBoundingClientRect().left-e.getBoundingClientRect().right<12;}));await page.locator('#f45TableTab').click();await expect(page.locator('#f45Tables')).toBeVisible();await expect(page.locator('[data-f45-table-group="empty"]')).toBeVisible();await shot('13-table-properties');
+  await page.locator('#f45ExtractionMode').selectOption('all');assert.equal(await page.evaluate(()=>originalSettings.extractionMode),'all');await page.locator('#f45ColumnTab').click();await shot('14-column-properties');
+  const count=await page.evaluate(()=>userColumns.length);await page.locator('#f45AddUser').click();await page.locator('#f45UserName').fill('취소할 사용자 열');await page.locator('#f45CancelUser').click();assert.equal(await page.evaluate(()=>userColumns.length),count);
+  await page.locator('#f45AddUser').click();await page.locator('#f45UserName').fill('검토 상태');await page.locator('#f45UserForm button[type="submit"]').click();await expect(page.locator('[data-f45-column-group="user"]')).toContainText('검토 상태');assert.equal(await page.evaluate(()=>JSON.stringify(samples.contract.map(r=>r.fields))),raw);
+  await page.locator('#propertyPopover [data-close-popover]').click();await expect(page.locator('#grid th[title="검토 상태"]')).toBeVisible();await open();await tab('general');await expect(page.locator('[data-original="hideEmptyColumns"]')).not.toBeChecked();await page.locator('[data-original="hideEmptyColumns"]').check();await cancel();assert.equal(await page.evaluate(()=>originalSettings.hideEmptyColumns),false);
+  await page.setViewportSize({width:375,height:812});await page.locator('#properties').click();assert.ok(await page.locator('#propertyPopover').evaluate(e=>{const r=e.getBoundingClientRect();return r.x>=0&&r.right<=innerWidth&&e.scrollWidth<=e.clientWidth;}));await shot('15-properties-narrow');await page.keyboard.press('Escape');await page.setViewportSize({width:1439,height:950});
+ });
+ await check('C11 expanded source business-key survives another checkbox change',async()=>{
+  await reload();await mode('extract');await page.locator('#properties').click();await page.locator('#f45ColumnTab').click();await page.locator('[data-f45-display-flag="hideEmptyColumns"]').uncheck();await page.locator('[data-f45-display-flag="hideUnmappedColumns"]').uncheck();await page.locator('#f45TableTab').click();await page.locator('#f45ExtractionMode').selectOption('all');await page.locator('[data-f45-source-table="$pointInfo:top"]').click();await page.locator('#propertyPopover [data-close-popover]').click();const key=await page.evaluate(()=>activeColumns.map(c=>c[0]).find(k=>!!k&&!stages.contract.columns.some(c=>c[0]===k)&&!['items','sampleStatus'].includes(k)));assert.ok(key);
+  await page.locator('#grid th[title="'+key+'"]').click({button:'right'});await page.locator('#keyToggle').click();await expect(page.locator('[data-key="'+key+'"]')).toBeChecked();await page.locator('[data-key="ctrtNo"]').uncheck();assert.ok(await page.evaluate(key=>draft.config.contract.keys.includes(key),key));await cancel();
+ });
+ await check('C20 legacy metadata, cancel, completion filters, period and Eisenhower views',async()=>{
+  await reload();await mode('db');await page.locator('#toggleSidebar').click();await page.locator('#manageAll').click();await page.locator('#managerList [data-note="n1"]').first().click();await page.locator('#f46EditImportant').uncheck();await page.locator('#f46EditColor').selectOption('pink');await page.locator('#editor button[data-close="editor"]').filter({hasText:'취소'}).click();assert.equal(await page.evaluate(()=>notes.find(n=>n.id==='n1').important),true);
+  await page.locator('#managerList [data-note="n1"]').first().click();await page.locator('#f46EditUrgent').check();await page.locator('#f46EditColor').selectOption('blue');await page.locator('#editDone').check();await page.locator('#editForm button[type="submit"]').click();const metadata=await page.evaluate(()=>{const n=notes.find(n=>n.id==='n1');return [n.important,n.urgent,n.color,n.done];});assert.deepEqual(metadata,[true,true,'blue',true]);await page.locator('#f46ImportantOnly').check();await page.locator('#f46Completion').selectOption('done');await expect(page.locator('#managerList [data-f46-note-row]')).toHaveCount(1);await page.locator('#f46ImportantOnly').uncheck();await page.locator('#f46Completion').selectOption('all');
+  await page.locator('#manager [data-manager="schedule"]').click();await page.locator('#calendarToggle').click();await page.locator('[data-f46-calendar-note="n7"]').first().click();await expect(page.locator('#editor')).toBeVisible();await expect(page.locator('#editName')).toHaveValue('납품기한 검토');await page.locator('#editor button[data-close="editor"]').filter({hasText:'취소'}).click();await page.locator('#calendarGrid [data-calendar-date="2026-10-08"]').click({position:{x:4,y:4}});await page.locator('#calendarGrid [data-calendar-date="2026-10-10"]').click({modifiers:['Shift'],position:{x:4,y:4}});await expect(page.locator('#f46RangeStatus')).toContainText('3일 선택');await page.locator('#f46RangeAdd').click();await expect(page.locator('#editDate')).toHaveValue('2026-10-08');await expect(page.locator('#editEnd')).toHaveValue('2026-10-10');await page.locator('#editor button[data-close="editor"]').filter({hasText:'취소'}).click();
+  await page.locator('#calendarMode').selectOption('eisenhower');await expect(page.locator('[data-f46-quadrant]')).toHaveCount(4);await expect(page.locator('[data-f46-quadrant="11"]')).toContainText('납품기한 검토');await shot('16-eisenhower');await page.locator('#manager [data-close="manager"]').filter({hasText:'닫기'}).click();await page.locator('#closeSidebar').click();
+  await open();await tab('general');await page.locator('[data-original="theme"]').selectOption('dark');await save();await page.locator('#toggleSidebar').click();await shot('17-dark-notes');const colors=await page.locator('.side-note-card[data-f46-color]').first().evaluate(e=>({paper:getComputedStyle(e).backgroundColor,ink:getComputedStyle(e).color}));assert.notEqual(colors.paper,colors.ink);await page.locator('#closeSidebar').click();
+ });
+ await check('Fresh reload resets sample edits and preserves zero browser errors',async()=>{
+  await page.setViewportSize({width:1439,height:950});await reload();assert.equal(await page.evaluate(()=>notes.length),9);assert.equal(await page.evaluate(()=>originalSettings.shareHistory.length),0);assert.equal(await page.evaluate(()=>originalSettings.launchers.length),2);await shot('12-final');assert.deepEqual(report.pageErrors,[]);assert.deepEqual(report.consoleErrors,[]);assert.deepEqual(report.externalRequests,[]);
+ });report.status='passed';
+ }
+}catch(error){report.status='failed';report.error=String(error);report.layout=await page.locator('#grid th').evaluateAll(elements=>elements.slice(0,9).map(e=>({key:e.title,height:e.getBoundingClientRect().height,width:e.getBoundingClientRect().width,html:e.innerHTML,children:[...e.children].map(c=>({tag:c.tagName,height:c.getBoundingClientRect().height,css:{display:getComputedStyle(c).display,lineHeight:getComputedStyle(c).lineHeight,minHeight:getComputedStyle(c).minHeight,width:getComputedStyle(c).width,whiteSpace:getComputedStyle(c).whiteSpace}}))})));await shot('failure');process.exitCode=1;}finally{await browser.close();const json=JSON.stringify(report,null,2)+'\n';await fs.writeFile(path.join(out,(before?'before':'result')+'.json'),json,{flag:'wx'});await fs.writeFile(path.join(evidence,(before?'before':'result')+'.json'),json);console.log(JSON.stringify({phase:report.phase,status:report.status,checks:report.checks.length,pageErrors:report.pageErrors,run:report.run}));}
