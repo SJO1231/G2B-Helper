@@ -8,10 +8,10 @@ export interface ProcurementObservation {
   stage: ProcurementStage; identity: string[]; fields: JsonRow; children: NestedDataset[];
   rawJson: string; source: ScreenLocator; capturedAt: string;
 }
-export interface ProcurementRecord extends ProcurementObservation { recordId: string; storeVersion: number; userValues: JsonRow; }
-export interface ExtractionView { key: string; label: string; stage?: ProcurementStage; rows: JsonRow[]; }
+export interface ProcurementRecord extends ProcurementObservation { recordId: string; storeVersion: number; userValues: JsonRow; sourceFields?: JsonRow; overrides?: JsonRow; }
+export interface ExtractionView { key: string; label: string; stage?: ProcurementStage; rows: JsonRow[]; source?: ScreenLocator; }
 export interface ExtractionResult { raw: unknown; views: ExtractionView[]; observations: ProcurementObservation[]; warnings: string[]; }
-export interface FieldConflict { recordId: string; field: string; previous: unknown; incoming: unknown; }
+export interface FieldConflict { recordId: string; field: string; previous: unknown; incoming: unknown; override?: unknown; }
 export interface CollectionPreview { token: string; observations: ProcurementObservation[]; conflicts: FieldConflict[]; counts: { inserted: number; identical: number; supplemented: number; changed: number }; }
 export interface CollectionDecision { recordId: string; field: string; useIncoming: boolean; }
 export interface FieldDictionary { keys: Record<string, string>; values: Record<string, Record<string, string>>; }
@@ -21,7 +21,8 @@ export type MvpColumnType = keyof typeof columnTypeLabels;
 export interface MvpColumnFormat { decimals?: number; grouping?: boolean; dateFormat?: 'dot' | 'dash' | 'compact'; }
 export type GridFilter = { mode: 'values'; values: string[] } | { mode: 'exact' | 'includes' | 'exclude'; terms: string[] };
 export interface GridViewState { search: string; combine: 'and' | 'or'; filters: [string, GridFilter][]; columns: { key: string; width: number; visible: boolean }[]; sorters: { key: string; dir: 'asc' | 'desc' }[]; userColumnsVisible?: boolean; }
-export interface MvpSettings { theme: 'light' | 'dark'; extractionMode: 'tables' | 'all'; hideEmptyColumns: boolean; hideUnmappedColumns: boolean; hideEmptyTables?: boolean; dictionary: FieldDictionary; launchers: { id: string; label: string; script: string }[]; shortcuts?: Partial<Record<MvpShortcutAction,string>>; columnTypes?: Record<string,MvpColumnType>; columnFormats?: Record<string,MvpColumnFormat>; columnLocks?: Record<string,boolean>; screenRules?: CaptureScreenRule[]; userColumns?: Partial<Record<ProcurementStage,string[]>>; }
+export interface MvpSettings { theme: 'light' | 'dark'; extractionMode: 'tables' | 'all'; hideEmptyColumns: boolean; hideUnmappedColumns: boolean; hideEmptyTables?: boolean; dictionary: FieldDictionary; launchers: { id: string; label: string; script: string }[]; shortcuts?: Partial<Record<MvpShortcutAction,string>>; columnTypes?: Record<string,MvpColumnType>; columnFormats?: Record<string,MvpColumnFormat>; columnLocks?: Record<string,boolean>; screenRules?: CaptureScreenRule[]; userColumns?: Partial<Record<ProcurementStage,string[]>>; documentProfiles?: Partial<Record<ProcurementStage,string>>; }
+export interface MvpSettings { sharedSettings?: import('./shared-settings').SharedSettingsState; }
 export interface GridRendererOptions {
   label: string; rows: JsonRow[]; settings: MvpSettings; readOnly?: boolean;
   userColumnKeys?: string[];
@@ -33,6 +34,9 @@ export interface GridRendererOptions {
   onColumnFormat?: (key: string, format: MvpColumnFormat) => void;
   onColumnLock?: (key: string, locked: boolean) => void;
   onNotice?: (message: string) => void;
+  statusElement?: HTMLElement;
+  correction?: (sourceIndex: number, key: string) => { source: unknown; value: unknown } | undefined;
+  onCorrection?: (sourceIndex: number, key: string) => void;
   onValueDictionary?: (key: string, value: unknown, selection?: { key: string; value: unknown }[]) => void;
   allowRowDelete?: boolean;
   onDeleteRows?: (rows: JsonRow[], sourceIndices: number[]) => void;
@@ -41,6 +45,8 @@ export interface GridRendererOptions {
 }
 export interface GridRendererHandle {
   rows(): JsonRow[]; setSearch(search: string): void; setSettings(settings: MvpSettings): void;
+  getSelectedRows(): { sourceIndex: number; row: JsonRow }[];
+  clearColumnFilters(): void;
   setRowFilter(predicate?: (row: JsonRow) => boolean): void;
   setUserColumnsVisible(visible: boolean): void;
   toggleSelectedBoolean(key: string): void;
@@ -49,6 +55,10 @@ export interface GridRendererHandle {
   addColumn(key: string): void; removeColumn(key: string): void; exportExcel(filename: string): void; exportCsv(filename: string): void;
   destroy(): void;
 }
-export type MvpRpcCommand = 'mvp.health' | 'mvp.preview' | 'mvp.apply' | 'mvp.records' | 'mvp.edit' | 'mvp.trash' | 'mvp.restore' | 'mvp.settings.read' | 'mvp.settings.save';
+export type MvpRpcCommand = 'mvp.health' | 'mvp.preview' | 'mvp.apply' | 'mvp.records' | 'mvp.edit' | 'mvp.trash' | 'mvp.restore' | 'mvp.settings.read' | 'mvp.settings.save' | 'mvp.document.profiles' | 'mvp.document.generate' | 'mvp.corrections.reset' | 'mvp.request.status';
+export interface DocumentItem { stage: ProcurementStage; identity: string[]; fields: JsonRow; userValues: JsonRow; children: NestedDataset[]; source: ScreenLocator | JsonRow; }
+export interface DocumentProfile { id: string; label: string; revisionId: number; outputDirectory: string; }
+export interface DocumentRequest { profileId: string; sourceKind: 'screen' | 'db'; items: DocumentItem[]; }
+export interface DocumentResult { requestId: string; status: 'success' | 'needs-input' | 'error' | 'partial'; results: { itemIndex: number; status: 'success' | 'needs-input' | 'error'; path?: string; code?: string; message?: string }[]; summary: { succeeded: number; needsInput: number; failed: number }; }
 export interface MvpEnvelope { protocolVersion: 1; requestId: string; command: MvpRpcCommand; payload: Record<string, unknown>; }
 export interface MvpResponse { protocolVersion: 1; requestId: string; result?: unknown; error?: { code: string; message: string }; }

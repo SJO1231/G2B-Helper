@@ -66,7 +66,7 @@ class FakeElement {
   setAttribute(name: string, value: string) { this.attrs[name] = value; }
   addEventListener(name: string, listener: Function) { this.listeners.set(name, [...this.listeners.get(name) || [], listener]); }
   removeEventListener(name: string, listener: Function) { this.listeners.set(name, this.listeners.get(name)?.filter(item => item !== listener) || []); }
-  querySelector(selector: string): FakeElement | undefined { return this.children.find(child => selector === 'input' && child.type === 'text') || this.children.map(child => child.querySelector(selector)).find(Boolean); }
+  querySelector(selector: string): FakeElement | undefined { return this.children.find(child => selector === 'input' && child.type === 'text' || selector.startsWith('.') && child.className.split(' ').includes(selector.slice(1))) || this.children.map(child => child.querySelector(selector)).find(Boolean); }
   closest(selector: string) { return selector.split(',').some(item => item.startsWith('.') && this.className.split(' ').includes(item.slice(1))) ? this : undefined; }
   getBoundingClientRect() { return { x: 0, width: 100 }; }
   focus() {}
@@ -84,6 +84,26 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
+  it('returns selected active source rows once with hidden values intact and excludes blank slots', () => {
+    const handle=renderGrid(new FakeElement() as unknown as HTMLElement,{label:'문서 선택',rows:[{code:'0001',amount:'12345678901234567890.001',flag:false,blank:'',zero:0},{code:'0002'}],settings});
+    const table=state.tables[0];table.fire('tableBuilt');expect(handle.getSelectedRows()).toEqual([]);
+    const [a,b]=table.getRows();table.rangeCells=[[b.getCell('f0'),a.getCell('f0'),a.getCell('f1')]];
+    expect(handle.getSelectedRows()).toHaveLength(2);handle.setRowFilter(row=>row.code==='0001');
+    const selected=handle.getSelectedRows();expect(selected).toEqual([{sourceIndex:0,row:{code:'0001',amount:'12345678901234567890.001',flag:false,blank:'',zero:0}}]);
+    selected[0].row.code='changed';expect(handle.getSelectedRows()[0].row.code).toBe('0001');
+    handle.setRowFilter(()=>false);expect(handle.getSelectedRows()).toEqual([]);
+  });
+  it('keeps the sheet and selection intact when settings close unchanged or only the theme changes', async () => {
+    const handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '설정 닫기', rows: [{ code: '001', amount: '1234' }], settings });
+    const table = state.tables[0]; table.fire('tableBuilt');
+    table.rangeCells = [[table.getRows()[0].getCell('f0')]];
+    const update = vi.spyOn(table, 'updateColumnDefinition');
+    handle.setSettings(structuredClone(settings));
+    handle.setSettings({ ...settings, theme: 'dark', shortcuts: { launcher: 'Alt+Shift+L' } });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(update).not.toHaveBeenCalled(); expect(table.getRanges()).toHaveLength(1);
+    expect(handle.rows()).toEqual([{ code: '001', amount: '1234' }]); handle.destroy();
+  });
   it('moves and hides selected columns as a group and undoes both without changing raw rows', () => {
     const parent = new FakeElement(), source = [{ code: '001', amount: '1.000000000000000001', flag: false, extra: 0 }];
     const handle = renderGrid(parent as unknown as HTMLElement, { label: '선택 열', rows: source, settings });
@@ -102,10 +122,10 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
   });
   it('opens key dictionary editing from the column list and toggles the same chooser', () => {
     const parent = new FakeElement(), rename = vi.fn(), handle = renderGrid(parent as unknown as HTMLElement, { label: '열 목록', rows: [{ code: '001' }], settings, onColumnRename: rename });
-    const table = state.tables[0]; table.fire('tableBuilt'); const root = parent.children[0], toggle = root.children[0].children[0];
-    toggle.fire('click'); expect(root.children[2].hidden).toBe(false); toggle.fire('click'); expect(root.children[2].hidden).toBe(true);
-    toggle.fire('click'); root.children[2].children[1].children[3].children[0].fire('contextmenu');
-    const body = root.children[2].children[1]; body.children[1].value = '새 번호'; body.children[2].fire('click');
+    const table = state.tables[0]; table.fire('tableBuilt'); const root = parent.children[0], toggle = table.options.rowHeader.titleFormatter();
+    toggle.fire('click'); expect(root.querySelector('.mvp-grid-panel')!.hidden).toBe(false); toggle.fire('click'); expect(root.querySelector('.mvp-grid-panel')!.hidden).toBe(true);
+    toggle.fire('click'); root.querySelector('.mvp-grid-panel')!.children[1].children[3].children[0].fire('contextmenu');
+    const body = root.querySelector('.mvp-grid-panel')!.children[1]; body.children[1].value = '새 번호'; body.children[2].fire('click');
     expect(rename).toHaveBeenCalledWith('code', '새 번호'); expect(handle.rows()).toEqual([{ code: '001' }]); handle.destroy();
   });
   it('passes selected real cells to batch value dictionaries while excluding padding and unrelated selections', () => {
@@ -132,7 +152,7 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     handle = renderGrid(parent as unknown as HTMLElement, { label: '실행 취소', rows: [{ amount: '100', total: '200' }], settings, readOnlyColumnKeys: ['total'], onRowsChanged: () => handle.updateDerivedValues(row => ({ total: String(Number(row.amount) * 2) })) });
     const table = state.tables[0]; table.fire('tableBuilt'); table.rangeCells = [[table.getRows()[0].getCell('f0')]];
     table.options.clipboardPasteAction([['1,234']]); expect(handle.rows()).toEqual([{ amount: '1234', total: '2468' }]);
-    const key = (value: string, shiftKey = false) => parent.children[0].fire('keydown', { target: parent.children[0].children[4], key: value, ctrlKey: true, shiftKey, preventDefault() {}, stopImmediatePropagation() {} });
+    const key = (value: string, shiftKey = false) => parent.children[0].fire('keydown', { target: parent.children[0].querySelector('.mvp-grid-typing-target')!, key: value, ctrlKey: true, shiftKey, preventDefault() {}, stopImmediatePropagation() {} });
     key('z'); expect(handle.rows()).toEqual([{ amount: '100', total: '200' }]); key('z', true); expect(handle.rows()).toEqual([{ amount: '1234', total: '2468' }]);
     handle.setSettings({ ...settings, columnLocks: { amount: true } }); key('z'); expect(handle.rows()[0].amount).toBe('1234'); handle.destroy();
   });
@@ -161,8 +181,8 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
   it('retains Unicode insertText and committed IME text without opening an editor on selection', () => {
     const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: '한글 입력', rows: [{ code: '원래 값' }], settings });
     const table = state.tables[0]; table.fire('tableBuilt'); const cell = table.getRows()[0].getCell('f0'); table.rangeCells = [[cell]];
-    const root = parent.children[0], proxy = root.children[4], target = new FakeElement(); target.className = 'tabulator-cell';
-    root.children[1].fire('click', { target, detail: 1 }); expect(cell.edit).not.toHaveBeenCalled();
+    const root = parent.children[0], proxy = root.querySelector('.mvp-grid-typing-target')!, target = new FakeElement(); target.className = 'tabulator-cell';
+    root.querySelector('.mvp-grid-table')!.fire('click', { target, detail: 1 }); expect(cell.edit).not.toHaveBeenCalled();
     let input: FakeElement | undefined;
     cell.edit.mockImplementation(() => { input = table.options.columns[0].editor(cell, (run: Function) => run(), vi.fn(), vi.fn()); });
     proxy.value = '입력'; proxy.fire('input', { isComposing: false }); expect(input?.value).toBe('입력'); expect(proxy.value).toBe('');
@@ -173,7 +193,7 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
   });
   it('keeps proxy clipboard copying raw TSV and pasting atomic across locked columns', () => {
     const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: '클립보드', rows: [{ code: '00\t01', flag: false }], settings });
-    const table = state.tables[0]; table.fire('tableBuilt'); const first = table.getRows()[0], proxy = parent.children[0].children[4];
+    const table = state.tables[0]; table.fire('tableBuilt'); const first = table.getRows()[0], proxy = parent.children[0].querySelector('.mvp-grid-typing-target')!;
     table.rangeCells = [[first.getCell('f0'), first.getCell('f1')]];
     const setData = vi.fn(); proxy.fire('copy', { clipboardData: { setData }, preventDefault() {}, stopPropagation() {} }); expect(setData).toHaveBeenCalledWith('text/plain', '"00\t01"\tfalse');
     handle.setSettings({ ...settings, columnLocks: { flag: true } });
@@ -182,21 +202,21 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     proxy.fire('paste', { clipboardData: { getData: () => '0002\ttrue' }, preventDefault() {}, stopPropagation() {} }); expect(handle.rows()).toEqual([{ code: '0002', flag: true }]); handle.destroy();
   });
   it('routes notices to the shared bottom line or keeps its fallback at the grid bottom', () => {
-    const onNotice = vi.fn(), parent = new FakeElement();
-    const handle = renderGrid(parent as unknown as HTMLElement, { label: '알림', rows: [{ amount: 1 }], settings, onNotice });
+    const onNotice = vi.fn(), parent = new FakeElement(), sharedStatus = new FakeElement(); sharedStatus.className = 'status';
+    const handle = renderGrid(parent as unknown as HTMLElement, { label: '알림', rows: [{ amount: 1 }], settings, onNotice, statusElement: sharedStatus as unknown as HTMLElement });
     const table = state.tables[0]; table.fire('tableBuilt'); const cell = table.getRows()[0].getCell('f0'); table.rangeCells = [[cell]];
     table.options.clipboardPasteAction([['invalid']]); expect(onNotice).toHaveBeenLastCalledWith('숫자와 소수점을 입력하세요. 쉼표는 세 자리씩 구분하세요.');
-    const root = parent.children[0]; expect(root.children[3].hidden).toBe(true); expect(root.children[0].children.some(child => child.className === 'mvp-grid-status')).toBe(false);
+    const root = parent.children[0]; expect(root.querySelector('.mvp-grid-footer')!.children[0]).toBe(sharedStatus); expect(root.children).not.toContain(sharedStatus);
     table.options.clipboardPasteAction([['1.000000000000000001']]); expect(onNotice).toHaveBeenLastCalledWith(''); handle.destroy();
     const fallbackParent = new FakeElement(), fallback = renderGrid(fallbackParent as unknown as HTMLElement, { label: '독립 알림', rows: [{ amount: 1 }], settings });
     const fallbackTable = state.tables[1]; fallbackTable.fire('tableBuilt'); fallbackTable.rangeCells = [[fallbackTable.getRows()[0].getCell('f0')]]; fallbackTable.options.clipboardPasteAction([['invalid']]);
-    const fallbackRoot = fallbackParent.children[0]; expect(fallbackRoot.children[3].className).toBe('mvp-grid-status');
-    expect(fallbackRoot.children[3].title).toContain('숫자'); fallback.destroy();
+    const fallbackStatus = fallbackParent.children[0].querySelector('.mvp-grid-footer')!.children[0]; expect(fallbackStatus.className).toBe('mvp-grid-status');
+    expect(fallbackStatus.title).toContain('숫자'); fallback.destroy();
   });
   it('uses the same visible-checkbox meaning for all, empty, unmapped and user column groups', () => {
     const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: '열 보기', rows: [{ blank: null, code: '001', unmapped: false, memo: 'user' }], userColumnKeys: ['memo'], settings: { ...settings, hideUnmappedColumns: true } });
-    const table = state.tables[0]; table.fire('tableBuilt'); parent.children[0].children[0].children[0].fire('click');
-    const panel = parent.children[0].children[2], body = panel.children[1], groups = body.children[2], list = body.children[3];
+    const table = state.tables[0]; table.fire('tableBuilt'); table.options.rowHeader.titleFormatter().fire('click');
+    const panel = parent.children[0].querySelector('.mvp-grid-panel')!, body = panel.children[1], groups = body.children[2], list = body.children[3];
     expect(panel.classList.add).toHaveBeenCalledWith('mvp-grid-column-panel');
     expect(groups.children).toHaveLength(4); expect(list.children).toHaveLength(4);
     expect(groups.children[0].children[0].children[0].indeterminate).toBe(true);
@@ -211,13 +231,18 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
   it('resets header filters while preserving the global search term and explains the boundary', () => {
     const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: '검색', rows: [{ code: '001' }, { code: '002' }], settings });
     const table = state.tables[0]; table.fire('tableBuilt'); handle.setSearch('001');
-    const toolbar = parent.children[0].children[0]; expect(toolbar.children[1].children.map(option => option.textContent)).toEqual(['모두 충족 (AND)', '하나 이상 충족 (OR)']);
     table.options.columns[0].headerContextMenu.find((entry: any) => entry.label === '열 필터').action();
-    const body = parent.children[0].children[2].children[1], choices = body.children[3];
+    const body = parent.children[0].querySelector('.mvp-grid-panel')!.children[1], choices = body.children[3];
     const first = choices.children[0].children[0]; first.checked = false; first.fire('change'); body.children[5].children[1].fire('click');
     expect(table.filter(table.data[0])).toBe(false);
-    const reset = toolbar.children[2]; expect(reset.textContent).toBe('열 필터 해제'); expect(reset.title).toContain('전체 검색어는 유지'); reset.fire('click');
+    handle.clearColumnFilters();
     expect(table.filter(table.data[0])).toBe(true); expect(table.filter(table.data[1])).toBe(false); handle.destroy();
+  });
+  it('requires every column filter even when an older session saved OR', () => {
+    const handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '이전 필터', rows: [{ a: 'x', b: 'yes' }, { a: 'x', b: 'no' }, { a: 'z', b: 'yes' }], settings, viewState: { search: '', combine: 'or', columns: [], sorters: [], filters: [['a', { mode: 'exact', terms: ['x'] }], ['b', { mode: 'exact', terms: ['yes'] }]] } });
+    const table = state.tables[0]; table.fire('tableBuilt');
+    expect(table.getRows('active').filter((row: any) => row.getData()._mvpRow < 3)).toHaveLength(1);
+    expect(handle.getViewState().combine).toBe('and'); expect(handle.rows()).toHaveLength(3); handle.destroy();
   });
   it('renders representative item names and right-aligned money while nested details keep the full raw data', () => {
     const onNested = vi.fn(), source = [{ items: [{ dtlsPrnmNm: '합성 품명', code: '0001', quantity: 0, flag: false }, { itemCfnm: '다른 품명' }], amount: '1.000000000000000001' }];
@@ -232,7 +257,7 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     const table = state.tables[0]; table.fire('tableBuilt');
     const cell = table.getRows()[0].getCell('f0'), target = new FakeElement(); target.className = 'tabulator-cell'; table.rangeCells = [[cell]];
     const requestFrame = vi.fn((run: Function) => run()); vi.stubGlobal('requestAnimationFrame', requestFrame);
-    parent.children[0].children[1].fire('click', { target, detail: 1 }); expect(cell.edit).not.toHaveBeenCalled();
+    parent.children[0].querySelector('.mvp-grid-table')!.fire('click', { target, detail: 1 }); expect(cell.edit).not.toHaveBeenCalled();
     const key = (value: string) => parent.children[0].fire('keydown', { target, key: value, preventDefault() {}, stopImmediatePropagation() {} });
     key('F2'); expect(cell.edit).toHaveBeenCalledTimes(1);
     let input: FakeElement | undefined;
@@ -396,7 +421,7 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     const requestFrame = vi.fn(); vi.stubGlobal('requestAnimationFrame', requestFrame);
     const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: '정렬', rows: [{ code: '001' }], settings });
     const table = state.tables[0]; table.fire('tableBuilt'); table.rangeCells = [[table.getRows()[0].getCell('f0')]];
-    const host = parent.children[0].children[1]; host.fire('click', { target: new FakeElement(), detail: 1 });
+    const host = parent.children[0].querySelector('.mvp-grid-table')!; host.fire('click', { target: new FakeElement(), detail: 1 });
     expect(requestFrame).not.toHaveBeenCalled(); handle.destroy();
   });
   it('reports user-column metadata even with zero rows and never deletes readonly derived columns', async () => {

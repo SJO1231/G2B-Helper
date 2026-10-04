@@ -8,11 +8,12 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 from .model import Fault, require, dumps, loads, digest, empty
 from .dictionary_seed import DEFAULTS
+from .documents import COMMANDS as DOCUMENT_COMMANDS, forward as document_forward
 
 IDENTITIES = {'receipt': ['ctrtDmndRcptNo', 'ctrtDmndRcptOrd'], 'bid': ['bidPbancNo', 'bidPbancOrd'], 'contract': ['ctrtNo', 'ctrtChgOrd']}
 SCREENS = {'receipt': ('01001', {'01114', '01117'}), 'bid': ('01173', {'01174'}), 'contract': ('01570', {'01571'})}
 ITEM_KEYS = {'receipt': ['ctrtDmndRcptItemSqno'], 'bid': ['bidClsfNo', 'bidPbancItemSqno'], 'contract': ['ctrtItemSqno']}
-WRITE = {'mvp.apply', 'mvp.edit', 'mvp.trash', 'mvp.restore', 'mvp.settings.save'}
+WRITE = {'mvp.apply', 'mvp.edit', 'mvp.corrections.reset', 'mvp.trash', 'mvp.restore', 'mvp.settings.save'}
 CONTRACT_USER_DEFAULTS = {'종결': False, '지정일': '', '종결금액': '', '선금보증기한': '', '선금보증금액': ''}
 DERIVED_USER_FIELDS = {'지체일수', '미종결금액'}
 
@@ -31,7 +32,7 @@ def valid_user_column_keys(keys):
     return isinstance(keys, list) and len(keys) <= 500 and all(isinstance(key, str) and key.strip() for key in keys) and len(set(keys)) == len(keys)
 
 def default_settings():
-    return {'theme': 'light', 'extractionMode': 'tables', 'hideEmptyColumns': True, 'hideUnmappedColumns': False, 'hideEmptyTables': False,
+    return {'theme': 'light', 'extractionMode': 'tables', 'hideEmptyColumns': True, 'hideUnmappedColumns': False, 'hideEmptyTables': True,
             'dictionary': {'keys': DEFAULTS['KEY_LABELS'], 'values': DEFAULTS['CODE_SEED']}, 'launchers': [],
             'shortcuts': {'collect': 'Alt+Shift+S', 'document': 'Alt+Shift+D'}, 'columnTypes': {}, 'columnLocks': {}, 'userColumns': {}}
 
@@ -195,19 +196,35 @@ class MvpGateway:
             require(previous is None or not previous.get('deletedAt'), '휴지통의 자료입니다. 먼저 복원한 뒤 수집하세요.', 'TRASHED')
             versions.append((rid, previous['storeVersion'] if previous else None))
             if previous is None:
-                records.append({**copy.deepcopy(observation), 'recordId': rid, 'storeVersion': 1, 'userValues': default_user_values(observation['stage'])})
+                records.append({**copy.deepcopy(observation), 'sourceFields': copy.deepcopy(observation['fields']), 'overrides': {},
+                                'recordId': rid, 'storeVersion': 1, 'userValues': default_user_values(observation['stage'])})
                 counts['inserted'] += 1; continue
             before_conflicts = len(conflicts)
-            fields = merge_fields(previous['fields'], observation['fields'], [], rid, conflicts, decisions)
+            # Legacy records use their stored view as baseline; old raw may describe
+            # a partial capture and cannot reconstruct historic manual edits.
+            source_fields = previous.get('sourceFields', previous['fields'])
+            overrides = previous.get('overrides', {})
+            fields = merge_fields(source_fields, observation['fields'], [], rid, conflicts, decisions)
+            for conflict in conflicts[before_conflicts:]:
+                if conflict['field'] in overrides:
+                    conflict['override'] = copy.deepcopy(overrides[conflict['field']])
             children = merge_children(previous['children'], observation['children'], observation['stage'], rid, conflicts, decisions)
-            changed = not same(fields, previous['fields']) or not same(children, previous['children'])
+            changed = not same(fields, source_fields) or not same(children, previous['children'])
             counts['changed' if len(conflicts) > before_conflicts else 'supplemented' if changed else 'identical'] += 1
-            records.append({**previous, **({'fields': fields, 'children': children, 'rawJson': observation['rawJson'], 'source': observation['source'], 'capturedAt': observation['capturedAt'], 'storeVersion': previous['storeVersion'] + 1} if changed else {})})
+            records.append({**previous, **({'fields': {**fields, **copy.deepcopy(overrides)}, 'sourceFields': fields,
+                            'overrides': copy.deepcopy(overrides), 'children': children, 'rawJson': observation['rawJson'],
+                            'source': observation['source'], 'capturedAt': observation['capturedAt'],
+                            'storeVersion': previous['storeVersion'] + 1} if changed else {})})
         return {'token': digest({'observations': observations, 'versions': versions}), 'observations': observations, 'conflicts': conflicts, 'counts': counts}, records
 
     def dispatch(self, command, payload):
         if command == 'mvp.health':
             return {'connected': True, 'storage': 'SQLite', 'protocolVersion': 1}
+        if command == 'mvp.request.status':
+            request_id = payload.get('requestId')
+            require(isinstance(request_id, str) and request_id.strip() and len(request_id) <= 200, '조회할 요청 번호를 확인하세요.')
+            row = self.db.execute('SELECT response FROM mvp_requests WHERE request_id=?', (request_id,)).fetchone()
+            return {'status': 'stored', 'response': loads(row[0])} if row else {'status': 'not-found'}
         if command == 'mvp.records':
             require(payload.get('stage') in IDENTITIES, '업무 종류를 확인하세요.')
             require('trashed' not in payload or type(payload['trashed']) is bool, '휴지통 조회는 체크값이어야 합니다.')
@@ -245,6 +262,38 @@ class MvpGateway:
             for record in records:
                 self.save(record)
             return {'records': records, 'counts': preview['counts']}
+        if command == 'mvp.corrections.reset':
+            changes = payload.get('records')
+            require(isinstance(changes, list) and 0 < len(changes) <= 20000, '정정을 취소할 행이 없거나 너무 많습니다.')
+            require(all(isinstance(change, dict) and isinstance(change.get('recordId'), str) for change in changes), '행 번호를 확인하세요.')
+            require(len({change['recordId'] for change in changes}) == len(changes), '정정을 취소할 행이 중복되었습니다.')
+            records = []
+            settings = loads(self.db.execute('SELECT payload FROM mvp_settings WHERE singleton=1').fetchone()[0])
+            locks = settings.get('columnLocks', {})
+            for change in changes:
+                previous = self.get(change['recordId'])
+                require(previous is not None, '정정을 취소할 자료가 없습니다.')
+                require(not previous.get('deletedAt'), '휴지통 자료는 먼저 복원하세요.', 'TRASHED')
+                require(type(change.get('storeVersion')) is int and change['storeVersion'] == previous['storeVersion'],
+                        '다른 창에서 수정되었습니다. 입력을 유지하고 재조회하세요.', 'STALE')
+                selected = change.get('fields')
+                require(isinstance(selected, list) and selected and all(isinstance(field, str) for field in selected)
+                        and len(set(selected)) == len(selected) and set(selected) <= set(previous['fields']), '취소할 원천 열을 확인하세요.')
+                require(not set(selected).intersection(IDENTITIES[previous['stage']]), '업무키는 수정할 수 없습니다.')
+                require(not any(locks.get(field, False) for field in selected), '잠긴 열은 정정을 취소할 수 없습니다.', 'LOCKED')
+                source_fields = copy.deepcopy(previous.get('sourceFields', previous['fields']))
+                overrides = copy.deepcopy(previous.get('overrides', {}))
+                fields = copy.deepcopy(previous['fields'])
+                for field in selected:
+                    overrides.pop(field, None)
+                    fields[field] = copy.deepcopy(source_fields[field])
+                record = previous
+                if not same(fields, previous['fields']) or not same(overrides, previous.get('overrides', {})):
+                    record = {**previous, 'fields': fields, 'sourceFields': source_fields, 'overrides': overrides,
+                              'storeVersion': previous['storeVersion'] + 1}
+                    self.save(record)
+                records.append(record)
+            return records
         if command == 'mvp.edit':
             changes = payload.get('records')
             column_change = payload.get('userColumns')
@@ -282,7 +331,11 @@ class MvpGateway:
                     require((field in fields) == (field in previous['fields']) and same(fields.get(field), previous['fields'].get(field))
                             and (field in user) == (field in previous.get('userValues', {})) and same(user.get(field), previous.get('userValues', {}).get(field)),
                             '잠긴 열은 수정할 수 없습니다: ' + field, 'LOCKED')
-                record = {**previous, 'fields': fields, 'userValues': user, 'storeVersion': previous['storeVersion'] + 1}
+                source_fields = copy.deepcopy(previous.get('sourceFields', previous['fields']))
+                overrides = {field: copy.deepcopy(value) for field, value in fields.items()
+                             if not same(value, source_fields[field])}
+                record = {**previous, 'fields': fields, 'sourceFields': source_fields, 'overrides': overrides,
+                          'userValues': user, 'storeVersion': previous['storeVersion'] + 1}
                 self.save(record); records.append(record)
             if column_change is not None:
                 settings = loads(self.db.execute('SELECT payload FROM mvp_settings WHERE singleton=1').fetchone()[0])
@@ -293,7 +346,10 @@ class MvpGateway:
             return records
         if command == 'mvp.settings.read':
             row = self.db.execute('SELECT store_version,payload FROM mvp_settings').fetchone()
-            return {'storeVersion': row[0], 'settings': loads(row[1])}
+            settings = loads(row[1])
+            settings.setdefault('hideEmptyColumns', True)
+            settings.setdefault('hideEmptyTables', True)
+            return {'storeVersion': row[0], 'settings': settings}
         if command == 'mvp.settings.save':
             settings = payload.get('settings', {})
             require(isinstance(settings, dict), '설정이 객체여야 합니다.')
@@ -313,6 +369,7 @@ class MvpGateway:
                     and ('dateFormat' not in value or isinstance(value['dateFormat'], str) and value['dateFormat'] in ('dot', 'dash', 'compact')) for value in formats.values()), '열 서식을 확인하세요.')
             require(isinstance(settings.get('columnLocks', {}), dict) and all(isinstance(key, str) and type(value) is bool for key, value in settings.get('columnLocks', {}).items()), '열 잠금은 체크값 목록이어야 합니다.')
             require('screenRules' not in settings or valid_screen_rules(settings['screenRules']), '수집 화면 규칙을 확인하세요.')
+            require(isinstance(settings.get('documentProfiles', {}), dict) and all(k in IDENTITIES and isinstance(v, str) and 0 < len(v) <= 200 for k, v in settings.get('documentProfiles', {}).items()), '업무별 문서 서식을 확인하세요.')
             require(isinstance(settings.get('shortcuts', {}), dict) and all(k in ('extract', 'collect', 'db', 'document', 'launcher') and isinstance(v, str) for k, v in settings.get('shortcuts', {}).items()), '단축키를 확인하세요.')
             require(isinstance(settings.get('userColumns', {}), dict) and all(stage in IDENTITIES and valid_user_column_keys(columns) for stage, columns in settings.get('userColumns', {}).items()), '사용자 열 설정을 확인하세요.')
             require(all(key not in settings or isinstance(settings[key], str) and settings[key].strip() for key in ('contractEndField', 'contractAmountField')), '계약 계산 기준 열을 확인하세요.')
@@ -329,14 +386,22 @@ class MvpGateway:
             require(isinstance(request, dict) and type(request.get('protocolVersion')) is int and request['protocolVersion'] == 1 and isinstance(rid, str) and 0 < len(rid) <= 200, '요청 버전/번호를 확인하세요.')
             command, payload = request.get('command'), request.get('payload')
             require(isinstance(command, str) and isinstance(payload, dict), '명령/본문 형식을 확인하세요.')
+            if command in DOCUMENT_COMMANDS:
+                # No Helper write transaction is held while the generator runs.
+                response['result'] = document_forward(command, payload, rid)
+                return response
             with self.lock:
                 fingerprint = digest(request)
-                cached = self.db.execute('SELECT fingerprint,response FROM mvp_requests WHERE request_id=?', (rid,)).fetchone()
-                if cached:
-                    require(cached[0] == fingerprint, '같은 요청 번호에 다른 내용이 들어왔습니다.', 'REQUEST_ID')
-                    return loads(cached[1])
                 self.db.execute('BEGIN IMMEDIATE' if command in WRITE else 'BEGIN')
                 try:
+                    # The writer lock must precede the replay check: another host
+                    # may still be committing a timed-out request with this ID.
+                    cached = self.db.execute('SELECT fingerprint,response FROM mvp_requests WHERE request_id=?', (rid,)).fetchone()
+                    if cached:
+                        require(cached[0] == fingerprint, '같은 요청 번호에 다른 내용이 들어왔습니다.', 'REQUEST_ID')
+                        cached_response = loads(cached[1])
+                        self.db.execute('COMMIT')
+                        return cached_response
                     response['result'] = self.dispatch(command, payload)
                     if command in WRITE:
                         self.db.execute('INSERT INTO mvp_requests VALUES(?,?,?)', (rid, fingerprint, dumps(response)))

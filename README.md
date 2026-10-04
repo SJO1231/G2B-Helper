@@ -1,42 +1,61 @@
 # G2B Helper
 
-현재 개발 대상은 **Chrome/Edge MV3 수동 추출·수집·Grid MVP**입니다. 이전 전체 제품 요구와 두 HTML 검토본은 보존하며 자동수집·메모/일정·HWPX·탐색기는 이번 범위에서 보류합니다. 최신 요구는 [MVP 기준](docs/MVP.md), 작업·검증은 [M01](docs/process/M01.md), 하네스 승인과 명령은 [P00](docs/process/P00.md)에 기록합니다.
+나라장터의 현재 화면을 직접 추출·수집하고, 로컬 SQLite DB에서 자료를 확인·편집하는 **Chrome/Edge MV3 확장 프로그램**입니다. 선택한 자료를 기존 Native 도우미를 통해 Studio lite로 보내 HWPX 문서를 생성하는 연결도 포함합니다.
 
-## 빌드와 실행
+현재 요구와 범위는 [MVP 기준](docs/MVP.md), 승인·작업·검증 상태는 [P00](docs/process/P00.md)가 기준입니다. 수정 요청은 [GitHub 이슈](https://github.com/SJO1231/G2B-Helper/issues)에 문제·기대 동작·완료 기준으로 정리하고, 검토·조치·검증 결과를 같은 이슈에 남깁니다.
+
+## 배포 파일과 설치
+
+현재는 마일스톤 #1의 개발·검토 단계입니다. 새 배포본 제작·게시와 실제 설치는 이후 사용자 허가를 받은 뒤 진행합니다. 기존 로컬 ZIP은 보존하며, 아래 절차는 승인된 배포본을 사용할 때의 안내입니다. 로컬 수정·개발 검사 완료와 설치·실사용 인수는 구분합니다.
+
+**Windows 배포 파일은 저장소 루트 기준 `dist/G2B_Helper_MVP.zip`입니다.** `dist`는 로컬 빌드 산출물이며 GitHub 소스 ZIP에 포함되는 파일이 아닙니다. 배포 ZIP에는 확장 폴더, Native 도우미 실행 파일과 런타임, `설치.cmd`, `설치안내.txt`가 들어 있습니다. 배포본 사용자는 Python이나 Node.js를 별도로 설치하지 않습니다.
+
+1. ZIP **전체**를 계속 사용할 고정 폴더에 풉니다. ZIP 안에서 바로 실행하지 않습니다.
+2. 압축을 푼 폴더의 **`설치.cmd`를 더블클릭**합니다. 배포본의 공개키로 확장 ID를 자동 계산하여 현재 사용자(HKCU)의 Chrome·Edge Native 연결을 함께 등록합니다. ID 복사나 명령 입력은 필요하지 않습니다.
+3. **처음 한 번은 브라우저에서 확장을 추가합니다.** Chrome은 `chrome://extensions`, Edge는 `edge://extensions`에서 개발자 모드 → 압축해제된 확장 로드 → 압축을 푼 폴더의 **`mvp-extension`**을 선택합니다. 두 브라우저에서 사용할 경우 각각 추가합니다.
+4. 나라장터 페이지를 새로 고칩니다. 리모컨에서 추출을 확인하고, 수집 후 DB에서 저장 결과를 확인합니다.
+
+`설치.cmd`는 Native 연결을 등록하며 브라우저의 최초 확장 추가까지 자동으로 수행하지는 않습니다. 조직의 스크립트 실행 제한을 바꾸지 않으며, 설치 오류가 표시되면 등록이 완료된 것이 아닙니다. 이전 공개키 없는 배포본을 사용했다면 새 확장 ID가 생길 수 있으므로 새 확장을 추가한 뒤 이전 중복 확장을 비활성화합니다.
+
+업데이트할 때는 Helper 작업을 마치고 새 배포본을 같은 폴더에 풀어 파일을 교체한 뒤 `설치.cmd`를 다시 실행합니다. 브라우저 확장 관리 화면에서 확장을 다시 로드하고 나라장터 페이지도 새로 고칩니다. 설치 폴더를 옮겼다면 Native 등록과 확장 폴더 연결도 새 위치로 맞춰야 합니다.
+
+업무 DB의 기본 위치는 **`%LOCALAPPDATA%\G2BHelper\mvp.sqlite3`**입니다. 배포 폴더와 분리되어 있으며 기존 PCE DB는 열지 않습니다. Helper는 상주 웹 서버 없이 필요할 때 Native Messaging으로 도우미를 실행합니다.
+
+### 실행 플래그와 스토어 배포
+
+현재 배포본은 `--load-extension` 바로가기를 사용하지 않습니다. 일반 Chrome 배포판에서는 Chrome 137부터 해당 플래그가 제거됐습니다. Chromium/Chrome for Testing의 지원을 일반 Chrome·Edge 배포에 그대로 적용하지 않습니다. Edge의 공식 로컬 설치 안내도 개발자 모드에서 압축해제 폴더를 직접 선택하는 절차입니다. [Chrome 공지](https://groups.google.com/a/chromium.org/g/chromium-extensions/c/1-g8EFx2BBY/m/S0ET5wPjCAAJ) · [Edge 로컬 설치·업데이트](https://learn.microsoft.com/en-us/microsoft-edge/extensions/getting-started/extension-sideloading)
+
+스토어 등록과 정식 기업 정책을 통한 자동 설치·업데이트는 별도 배포 과제입니다. 예를 들어 Edge는 도메인에 가입하지 않은 Windows에서도 Edge Add-ons에 등록된 확장의 정책 설치를 허용하지만, 스토어 밖 확장은 관리 조건이 다릅니다. 현재 설치 파일은 이러한 확장 설치 정책을 설정하지 않습니다. [Edge 강제 설치 정책](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-policies/extensioninstallforcelist)
+
+## 주요 사용 흐름
+
+- **추출:** 현재 화면을 임시 표로 확인합니다. 기본은 `tables`이며 `설정 → 일반 → 추출`에서 전체를 선택하면 `pointInfo`도 표시합니다. 신규·누락 설정은 빈 열/빈 표를 숨기지만 원본은 보존하며, 저장한 표시 설정은 유지합니다. 추출만으로 DB에 저장하지 않습니다.
+- **수집·DB:** 지정 URL·프레임의 화면 코드·업무번호/차수를 확인하고, 신규·동일·보충·충돌을 검토한 뒤 SQLite에 저장합니다. DB는 접수·공고·계약 탭으로 구분합니다. 날짜 기준은 전체가 기본이며, 날짜 열을 선택하면 입력 구간과 ±1년 이동으로 필터링합니다.
+- **표 편집:** 머리글의 필터·우클릭 메뉴와 표 왼쪽 위 **속성**에서 열을 관리합니다. 원천 키·원값은 표시명과 분리됩니다. 열 표시명 등은 해당 동작에서 저장하고, DB 셀 편집·사용자 열 정의는 **저장**으로 반영합니다. 행 삭제는 휴지통으로 이동하며 사용자 열 삭제는 표시 정의만 제거합니다.
+- **정정·계산:** 원천값을 고친 셀에는 정정 표시가 나타나며 최근 수집값을 확인하거나 정정을 취소할 수 있습니다. 계약의 지체일수와 미종결금액은 읽기 계산값입니다. 종결·지정일·종결금액·선금보증 관련 입력을 지원합니다.
+- **공유 설정:** 사전, 열 타입·서식·잠금, 수집 화면 조건을 JSON으로 공유합니다. 차이를 확인하고 선택 적용한 뒤 설정창의 **저장**으로 확정합니다. **닫기**는 설정 초안을 취소합니다. 실행 JS·개인 경로·업무 자료는 공유 항목에 포함하지 않습니다.
+- **문서 생성:** 리모컨의 **문서**는 현재 화면을 읽고 인식한 자료의 선택창을 바로 엽니다. 연결 자료가 없거나 화면을 읽지 못하면 안내와 함께 DB로 이동합니다. DB에서 행을 고른 뒤 **생성**을 눌러도 같은 선택창이 열립니다. 자료를 확인해 연결된 Studio lite 서식으로 HWPX를 만듭니다. Studio lite가 실행 중이어야 하며 서식·필드 매핑·문구 조건·저장 폴더는 Studio lite에서 관리합니다. 서식 연결은 미지정일 때만 선택하고, 기존 파일은 조용히 덮어쓰지 않습니다.
+
+JS 런처에는 확장 상세 페이지의 **사용자 스크립트 허용** 설정이 필요합니다. 설정의 단축키는 리모컨이 있는 페이지에서 사용하며 기본값은 수집 `Alt+Shift+S`, 문서 연결 `Alt+Shift+D`입니다. 브라우저 전체 단축키는 확장 프로그램 단축키 화면에서 별도로 지정합니다. [Chrome userScripts 안내](https://developer.chrome.com/docs/extensions/reference/api/userScripts)
+
+DB·설정 저장 응답을 확인하지 못하면 **저장 결과 확인**에서 기존 요청의 결과를 확인하거나 같은 요청을 재시도합니다. 이 복구는 확장 세션 범위이며 브라우저 종료·확장 다시 로드 이후까지 보장하지 않습니다. 문서 생성의 **같은 요청 다시 시도**는 열린 기능창의 메모리에 남은 요청을 사용하므로 기능창 종료·페이지 새로고침 이후까지 복구되지 않습니다. 업데이트나 창 종료 전에 미확인 저장과 문서 생성 결과를 확인하세요.
+
+## 소스에서 빌드하기
+
+배포본을 사용하는 사람에게는 아래 개발 환경이 필요하지 않습니다. 소스 빌드에는 Node.js와 의존성이, Native 실행 파일 생성에는 프로젝트 `.venv`의 Python과 PyInstaller가 필요합니다.
 
 ```powershell
 npm ci
 npm run build:mvp
+npm run package:mvp
 ```
 
-1. Chrome `chrome://extensions` 또는 Edge `edge://extensions`에서 개발자 모드 → 압축해제된 확장 로드 → `dist/mvp-extension`을 선택합니다.
-2. 확장 ID를 복사합니다. ZIP을 풀어 사용하는 경우에도 확장 폴더 경로를 변경하지 않는 편이 좋습니다.
-3. 제공된 Native Host 폴더를 유지하고 다음 설치 명령을 실행합니다. HKCU에 해당 확장의 Native Host만 등록합니다.
+결과는 `dist/mvp-extension`과 `dist/G2B_Helper_MVP.zip`입니다. 고급 설치에서는 기존 `scripts/install-mvp-host.ps1`의 `-ExtensionId` 및 `-Preview`도 사용할 수 있습니다. 일반 배포 사용자는 ZIP의 `설치.cmd`를 사용합니다.
 
-```powershell
-./scripts/install-mvp-host.ps1 -ExtensionId '복사한32자리확장ID'
-```
+## 검증과 남은 범위
 
-Host가 아직 없으면 먼저 `.venv`의 Python과 PyInstaller로 `./scripts/package-mvp.ps1 -BuildHost`를 실행합니다. 제품은 상주 서버를 띄우지 않고 확장이 필요할 때 Native Messaging으로 실행합니다. 기존 PCE DB를 열지 않으며 기본 저장 위치는 `%LOCALAPPDATA%/G2BHelper/mvp.sqlite3`입니다.
+개발 검증은 단위·임시 SQLite·Native 통신·실제 빌드의 브라우저 UI·ZIP 무결성/파일 대응으로 나눕니다. 작업별 실행 명령과 결과는 [P00](docs/process/P00.md)를 확인하세요. Agent는 현재 승인 task의 하네스 `start`·`guard`·`run`·`verify`를 사용하며, 과거 task를 임의로 재시작하지 않습니다.
 
-나라장터를 열면 작은 리모컨이 표시됩니다. 확장 아이콘으로 다시 열 수 있습니다. 추출은 임시 표, 수집은 지정 URL·동일 프레임 화면 코드·업무번호/차수를 검사한 뒤 SQLite에 저장합니다. 기본 추출은 `tables`만, `설정 → 표시 → 추출`에서 전체로 변경할 수 있습니다. 원본 확인에서는 pointInfo도 유지됩니다.
+실제 나라장터 로그인 화면, 설치된 Chrome/Edge와 Native 연결, 실제 업무 서식의 문서 내용 인수는 개발용 합성 검사와 별도입니다. Studio lite는 이 Helper ZIP에 포함되지 않습니다. 원본 JSON은 WebSquare에서 읽은 수집 결과이며 HTTP 응답 원문을 뜻하지 않습니다.
 
-JS 런처는 확장 상세 페이지의 ‘사용자 스크립트 허용’ 설정이 필요합니다. 설정에서 입력하는 단축키는 리모컨이 있는 페이지에 적용됩니다. 브라우저 전체 단축키는 확장 프로그램의 단축키 화면에서도 지정할 수 있습니다. 기본은 수집 Alt+Shift+S, 문서 연결 Alt+Shift+D입니다. 문서는 이번 MVP에서 JSON 전달 파일까지만 준비합니다. [Chrome userScripts 공식 설명](https://developer.chrome.com/docs/extensions/reference/api/userScripts)
-
-## Grid
-
-헤더의 필터 버튼과 우클릭으로 필터·표시명·타입·숨김을 지정합니다. 숨김 열은 Grid의 ‘숨김 열’ 버튼에서 복원합니다. 원천 키·원값은 사전 표시명과 분리됩니다. 사용자 열은 공통 숨김/표시 버튼이 있습니다. 컬럼 표시명은 ‘컬럼 저장’, 업무 셀 편집과 사용자 열 정의는 ‘저장’으로 반영합니다. 실패한 입력은 현재 창에 유지됩니다. 사용자 열 삭제는 표시 정의를 제거하며 기존 저장값은 보존합니다. 저장값의 영구 삭제·삭제한 열 복원 UI는 이번 MVP에 포함하지 않습니다.
-
-DB는 접수·입찰·계약을 구분하며 기본 최근 3개월 날짜 필터와 ±1년 이동을 제공합니다. 자동으로 확정할 날짜 열이 없으면 선택 후 적용합니다. 계약은 종결 버튼/필터, 지정일−납품기한 지체일수, 계약금액−종결금액 미종결금액, 선금보증기한/금액을 제공합니다. 지체일수와 미종결금액은 읽기 계산값입니다.
-
-## 검증과 경계
-
-```powershell
-node scripts/harness/cli.mjs doctor
-node scripts/harness/cli.mjs start M01 implementer
-npm run verify:mvp
-```
-
-단위·SQLite·Native 프레임·제공 JSON 구조·Playwright 화면 검증을 실행합니다. 검증 명령은 Windows Host도 빌드하므로 프로젝트 `.venv`와 PyInstaller가 필요합니다. UI 검사는 합성 자료와 로컬 참고 JSON을 구분합니다. Playwright는 개발 도구이며 제품 기능에 포함하지 않습니다. 실제 나라장터 로그인 화면 및 Chrome/Edge와 설치 Host의 실제 연결은 별도 수동 검증입니다. 로컬 참고자료는 배포 ZIP과 Git 업로드 대상에서 제외합니다. 보존하는 원본 JSON은 WebSquare에서 읽은 수집 결과이며 HTTP 응답 원문을 뜻하지 않습니다.
-
-`prototypes/table-flow`와 `prototypes/features/grid`는 기존 검토본입니다. 최신 MVP와 기능 완료 상태를 혼동하지 않습니다. 모델 추천/구성/실제 호출도 P00에서 구분합니다. Astra가 필요하면 자동 전환하지 않고 사용자 지시를 기다립니다.
+자동수집·자동 브라우저 조작, 메모·일정 UI, 화면·관계 테이블의 실제 등록, 탐색기 연동, 트레이·전역 단축키는 이번 범위에서 보류합니다. Playwright는 개발 검증 도구로만 사용합니다. `참고자료`, `prototypes/table-flow`, `prototypes/features/grid`는 보존한 참고·검토 자료이며 배포 ZIP에 넣지 않습니다.

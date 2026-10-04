@@ -1,10 +1,12 @@
 import './style.css';
 import { renderGrid } from './grid';
 import { defaultScreenRules, extractCapture, extractionViews, loadJson } from './extractor';
-import { rpc, captureCurrentPage, runLauncher } from './bridge';
+import { rpc, captureCurrentPage, runLauncher, pendingWrite, recoverWrite } from './bridge';
+import { renderSharedSettingsPanel } from './shared-settings';
 import { RecordView } from './record-view';
-import { collectorBridge, documentPayload } from './integrations';
-import { columnTypeLabels, type MvpColumnType, type CollectionDecision, type CollectionPreview, type ExtractionResult, type ExtractionView, type GridRendererHandle, type GridViewState, type JsonRow, type MvpSettings, type ProcurementRecord, type ProcurementStage } from './contracts';
+import { collectorBridge, documentItems, screenDocumentItems } from './integrations';
+import type { DocumentItem, DocumentProfile, DocumentRequest, DocumentResult } from './contracts';
+import { columnTypeLabels, type CaptureScreenRule, type MvpColumnType, type CollectionDecision, type CollectionPreview, type ExtractionResult, type ExtractionView, type GridRendererHandle, type GridViewState, type JsonRow, type MvpSettings, type ProcurementRecord, type ProcurementStage } from './contracts';
 import { dateColumnKeys, dateParts, rawText } from './grid-model';
 import { setIcon } from './icons';
 
@@ -14,10 +16,12 @@ const tabId = Number(params.get('sourceTabId')) || undefined;
 const native = typeof chrome !== 'undefined' && !!chrome.runtime?.id;
 const stageLabels:Record<ProcurementStage,string> = {receipt:'접수',bid:'공고',contract:'계약'};
 const defaultColumnTypes:NonNullable<MvpSettings['columnTypes']>={ctrtAmt:'money',ctrtDmndAmt:'money',dlvgdsTermYmd:'date',종결금액:'money',미종결금액:'money',선금보증금액:'money',지정일:'date',선금보증기한:'date'};
-let settings:MvpSettings = {theme:'light',extractionMode:'tables',hideEmptyColumns:true,hideUnmappedColumns:false,dictionary:{keys:{ctrtNo:'계약번호',ctrtChgOrd:'변경차수',ctrtAmt:'계약금액',dlvgdsTermYmd:'납품기한',ctrtDmndRcptNo:'접수번호',ctrtDmndRcptOrd:'차수'},values:{}},launchers:[],shortcuts:{collect:'Alt+Shift+S',document:'Alt+Shift+D'},columnTypes:{종결금액:'money',미종결금액:'money',선금보증금액:'money',지정일:'date',선금보증기한:'date'}};
+let settings:MvpSettings = {theme:'light',extractionMode:'tables',hideEmptyColumns:true,hideEmptyTables:true,hideUnmappedColumns:false,dictionary:{keys:{ctrtNo:'계약번호',ctrtChgOrd:'변경차수',ctrtAmt:'계약금액',dlvgdsTermYmd:'납품기한',ctrtDmndRcptNo:'접수번호',ctrtDmndRcptOrd:'차수'},values:{}},launchers:[],shortcuts:{collect:'Alt+Shift+S',document:'Alt+Shift+D'},columnTypes:{종결금액:'money',미종결금액:'money',선금보증금액:'money',지정일:'date',선금보증기한:'date'}};
 let settingsVersion=1, extraction:ExtractionResult|undefined, handle:GridRendererHandle|undefined;
 let records:ProcurementRecord[]=[], stage:ProcurementStage='receipt', activeView:ExtractionView|undefined, dirty=false, userVisible=true, isDb=mode==='db';
 let recordsRevision=0;
+let displayedRecords:ProcurementRecord[]=[];
+let savingRows=false;
 const temporaryBuffers=new Map<string,JsonRow[]>();
 const temporaryColumns=new Map<string,string[]>();
 let recordView:RecordView|undefined, userColumnDraft:string[]=[];
@@ -36,7 +40,7 @@ function select(label:string, choices:[string,string][], selected?:string){const
 const shell=node('section',undefined,'shell'), title=node('header',undefined,'titlebar'), toolbar=node('div',undefined,'toolbar actionbar'), filters=node('div',undefined,'date-controls'), tabs=node('nav',undefined,'tabs'), area=node('div',undefined,'grid-area'), status=node('div',undefined,'status');
 const heading=node('strong',mode==='db'?'DB':mode==='collect'?'수집':mode==='document'?'문서 연결':mode==='launcher'?'런처':'추출');
 function message(text:string,error=false){const detail=text.replace(/\s*\n\s*/g,' ');status.title=detail;status.textContent=/top URL|출처|origin/i.test(detail)?'출처 미확인 · 추출만 가능합니다.':detail.length>64?detail.slice(0,61)+'…':detail;status.classList.toggle('error',error);}
-function fail(error:unknown){message(error instanceof Error?error.message:String(error),true);}
+function fail(error:unknown){message(error instanceof Error?error.message:String(error),true);if(native)void updatePendingNotice().catch(()=>{});}
 function close(){rememberView();if(window.parent!==window){window.parent.postMessage({kind:'mvp.close'},'*');}else window.close();}
 function sourceKey(key:string){return [...(recordView?.userNames||[])].find(([,alias])=>alias===key)?.[0]||key;}
 function gridSettings(){const value=structuredClone(settings);if(isDb&&recordView)for(const[key,alias]of recordView.userNames){if(alias===key)continue;if(value.columnTypes?.[key])(value.columnTypes??={})[alias]=value.columnTypes[key];if(value.columnFormats&&Object.hasOwn(value.columnFormats,key))value.columnFormats[alias]=value.columnFormats[key];if(value.columnLocks?.[key]===true)(value.columnLocks??={})[alias]=true;if(Object.hasOwn(value.dictionary.keys,key))value.dictionary.keys[alias]=value.dictionary.keys[key];}return value;}
@@ -60,8 +64,28 @@ const importFile=input('JSON 열기','file');importFile.accept='.json,.txt';impo
 const hiddenUser=button('사용자 열 숨김',()=>{userVisible=!userVisible;handle?.setUserColumnsVisible(userVisible);hiddenUser.classList.toggle('active',!userVisible);hiddenUser.setAttribute('aria-pressed',String(!userVisible));});hiddenUser.setAttribute('aria-pressed','false');hiddenUser.title='사용자 열 표시 여부를 전환합니다.';
 const finishSelected=button('종결',()=>handle?.toggleSelectedBoolean(recordView?.completionKey||'종결'));finishSelected.hidden=true;
 finishSelected.title='선택한 계약 행의 종결 체크를 반전합니다. 변경 후 저장하세요.';
-const tabList=node('div',undefined,'tab-list'),tabActions=node('div',undefined,'tab-actions');tabActions.append(finishSelected,hiddenUser,search);tabs.append(tabList,tabActions);
+const resetFilters=button('열 필터 해제',()=>handle?.clearColumnFilters());resetFilters.title='머리글에서 설정한 열 필터만 해제합니다. 전체 검색어는 유지합니다.';
+const tabList=node('div',undefined,'tab-list'),tabActions=node('div',undefined,'tab-actions');tabActions.append(finishSelected,hiddenUser,resetFilters,search);tabs.append(tabList,tabActions);
 const exports=node('div',undefined,'export-actions');exports.append(button('원본 JSON',()=>rawDialog(isDb?records.map(r=>({recordId:r.recordId,rawJson:r.rawJson})):extraction?.raw||{})),button('JSON',()=>download(JSON.stringify(exportJson(),null,2),'g2b-tables.json')),button('CSV',()=>handle?.exportCsv('g2b-table.csv')),button('Excel',()=>handle?.exportExcel('g2b-table.xlsx')),save,importFile);toolbar.append(filters,exports);
+const generateButton=button('생성',()=>generateDocuments());exports.insertBefore(generateButton,save);
+const pendingButton=button('저장 결과 확인',()=>showPendingWrite());pendingButton.hidden=true;tabActions.prepend(pendingButton);
+async function updatePendingNotice(){if(native)pendingButton.hidden=!(await pendingWrite());}
+async function showPendingWrite(){
+ const {body}=dialog('저장 결과 확인');
+ const result=await recoverWrite();
+ if(result.status==='none'){body.append(node('p','미확인 저장이 없습니다.'));await updatePendingNotice();return;}
+ if(result.status==='stored'){body.append(node('p','이전 요청이 저장된 것을 확인했습니다.'),button('저장된 화면 다시 불러오기',()=>{if(dirty&&!confirm('저장하지 않은 화면 입력을 닫고 저장된 자료를 다시 불러올까요?'))return;location.reload();}));await updatePendingNotice();return;}
+ const pending=result.pending!;
+ const labels:Record<string,string>={'mvp.apply':'수집','mvp.edit':'표 수정','mvp.settings.save':'설정','mvp.trash':'휴지통 이동','mvp.restore':'휴지통 복원','mvp.corrections.reset':'정정 취소'};
+ body.append(node('p',`${labels[pending.envelope.command]||'자료'} 저장 기록이 없습니다. 이전에 확인한 같은 요청을 다시 보낼 수 있습니다.`));
+ const retry=button('같은 요청 다시 저장',async()=>{retry.disabled=true;try{const outcome=await recoverWrite(pending.envelope.requestId,true);body.replaceChildren(node('p',outcome.status==='stored'?'저장된 것을 확인했습니다.':outcome.response?.error?.message||'저장할 요청이 없습니다.'),button('화면 다시 불러오기',()=>{if(dirty&&!confirm('화면 입력을 닫고 저장된 자료를 다시 불러올까요?'))return;location.reload();}));await updatePendingNotice();}finally{retry.disabled=false;}});body.append(retry);
+}
+function correctedCell(index:number,key:string){const record=displayedRecords[index];return record?.overrides&&Object.hasOwn(record.overrides,key)?{source:record.sourceFields?.[key],value:record.overrides[key]}:undefined;}
+function correctionDialog(index:number,key:string){
+ const record=displayedRecords[index];if(!record?.overrides||!Object.hasOwn(record.overrides,key))return;
+ const {d,body}=dialog('정정값 확인');body.append(node('strong',settings.dictionary.keys[key]||key),node('p','최근 수집값'),node('pre',JSON.stringify(record.sourceFields?.[key])),node('p','사용자 정정값'),node('pre',JSON.stringify(record.overrides[key])));
+ const reset=button('정정 취소 · 수집값 사용',async()=>{if(dirty)throw new Error('표 입력을 먼저 저장한 뒤 정정을 취소하세요.');reset.disabled=true;try{await rpc('mvp.corrections.reset',{records:[{recordId:record.recordId,storeVersion:record.storeVersion,fields:[key]}]});d.close();await loadRecords();message('최근 수집값으로 복원했습니다.');}finally{reset.disabled=false;}});reset.disabled=!native||settings.columnLocks?.[key]===true;body.append(reset);
+}
 function exportJson(){if(isDb)return handle?.rows()||[];if(!extraction)return{};const tables=Object.fromEntries(extractionViews(extraction,'tables').map(v=>[v.key,temporaryBuffers.get(v.key)||v.rows]));if(settings.extractionMode==='all'){const points=extractionViews(extraction,'all').filter(v=>!Object.hasOwn(tables,v.key));return{pointInfo:points.length===1?(temporaryBuffers.get(points[0].key)||points[0].rows)[0]||{}:Object.fromEntries(points.map(v=>[v.key,(temporaryBuffers.get(v.key)||v.rows)[0]||{}])),tables};}return{tables};}
 const start=input('시작일'),end=input('종료일');start.className=end.className='date-field';start.placeholder=end.placeholder='YYYY.MM.DD';
 const today=new Date();end.value=dateText(today);const initial=new Date(today);initial.setMonth(initial.getMonth()-3);start.value=dateText(initial);
@@ -74,10 +98,10 @@ for(const control of[start,end,dateKey,completion])control.onchange=()=>{if(dirt
 function dateChoices(rows:JsonRow[]){const current=dateKey.value,configured=gridSettings();dateKey.replaceChildren(new Option('전체',''));const keys=dateColumnKeys(rows,configured);for(const key of keys)dateKey.append(new Option(configured.dictionary.keys[key]||key,key));dateKey.value=keys.includes(current)?current:'';}
 function refreshDateChoices(){dateChoices(isDb?[...records.map(r=>r.fields),Object.fromEntries([...(recordView?.userNames.values()||[])].map(key=>[key,undefined]))]:handle?.rows()||activeView?.rows||[]);}
 function applyDates(){if(isDb){showRecords();return;}const begin=parseDate(start.value),finish=parseDate(end.value);if(dateKey.value&&(!begin||!finish||begin>finish)){message('날짜 구간을 확인하세요.',true);return;}const key=dateKey.value;handle?.setRowFilter(key?row=>{const date=parseDate(row[key]);return !!date&&date>=begin!&&date<=finish!;}:undefined);}
-function destroyGrid(){rememberView();handle?.destroy();handle=undefined;viewKey='';area.replaceChildren();}
+function destroyGrid(){rememberView();shell.append(status);handle?.destroy();handle=undefined;viewKey='';area.replaceChildren();}
 function showGrid(view:ExtractionView, options:{userKeys?:string[];readonlyKeys?:string[]}={}){
  destroyGrid();activeView=view;dirty=false;save.disabled=true;save.hidden=false;viewKey=(isDb?'db:':'extract:')+view.key;const viewState=viewStates.get(viewKey);search.value=viewState?.search||'';userVisible=viewState?.userColumnsVisible!==false;hiddenUser.classList.toggle('active',!userVisible);hiddenUser.setAttribute('aria-pressed',String(!userVisible));
- handle=renderGrid(area,{label:view.label,rows:view.rows,viewState,settings:gridSettings(),userColumnKeys:options.userKeys,itemColumnKeys:isDb&&recordView?[...new Set(records.flatMap(r=>r.children.filter(c=>c.kind==='items').map(c=>recordView!.childNames.get(c.key)!).filter(Boolean)))]:undefined,readOnlyColumnKeys:options.readonlyKeys,allowRowDelete:true,onNotice:text=>message(text,true),
+ handle=renderGrid(area,{label:view.label,rows:view.rows,viewState,settings:gridSettings(),userColumnKeys:options.userKeys,itemColumnKeys:isDb&&recordView?[...new Set(records.flatMap(r=>r.children.filter(c=>c.kind==='items').map(c=>recordView!.childNames.get(c.key)!).filter(Boolean)))]:undefined,readOnlyColumnKeys:options.readonlyKeys,allowRowDelete:true,statusElement:status,onNotice:text=>message(text,true),...(isDb?{correction:correctedCell,onCorrection:correctionDialog}:{}),
   onRowsChanged:(rows)=>{if(!isDb){temporaryBuffers.set(view.key,rows);return;}dirty=true;save.disabled=!native;if(stage==='contract'&&recordView)handle?.updateDerivedValues(row=>recordView!.derive(row));},onUserColumnsChanged:(keys)=>{if(!isDb){temporaryColumns.set(view.key,keys);return;}userColumnDraft=recordView!.definitionNames(keys);dirty=true;save.disabled=!native;},onColumnRename:(key,label)=>{settings.dictionary.keys={...settings.dictionary.keys,[isDb?sourceKey(key):key]:label};autosave();},onColumnType:(key,type)=>{settings.columnTypes={...settings.columnTypes,[isDb?sourceKey(key):key]:type};autosave();},onColumnFormat:(key,format)=>{settings.columnFormats={...settings.columnFormats,[isDb?sourceKey(key):key]:format};autosave();},onColumnLock:(key,locked)=>{settings.columnLocks={...settings.columnLocks,[isDb?sourceKey(key):key]:locked};autosave();},onValueDictionary:(key,value,selection)=>valueDictionary((selection||[{key,value}]).map(entry=>({...entry,key:isDb?sourceKey(entry.key):entry.key}))),...(isDb?{onDeleteRows:(_rows:JsonRow[],indices:number[])=>{void trashRows(indices).catch(fail);}}:{}),onNested:(_row,key,rows)=>nestedView(key,rows)});
  if(!userVisible)handle.setUserColumnsVisible(false);
 }
@@ -85,7 +109,7 @@ function showExtraction(){if(!extraction)return;isDb=false;recordView=undefined;
 function recordRow(record:ProcurementRecord){return recordView!.toRow(record);}
 function showRecords(){if(dirty){message('입력을 저장한 뒤 필터를 변경하세요.');return;}isDb=true;completion.hidden=finishSelected.hidden=stage!=='contract';const begin=parseDate(start.value),finish=parseDate(end.value);if(dateKey.value&&(!begin||!finish||begin>finish)){message('날짜 구간을 확인하세요.',true);return;}
  const filtered=records.filter(r=>{if(stage==='contract'&&completion.value!=='all'&&Boolean(r.userValues['종결'])!==(completion.value==='closed'))return false;if(dateKey.value){const source=sourceKey(dateKey.value),d=parseDate(recordView?.userNames.get(source)===dateKey.value?r.userValues[source]:r.fields[dateKey.value]);return !!d&&d>=begin!&&d<=finish!;}return true;});
- showGrid({key:stage,label:stageLabels[stage],stage,rows:filtered.map(recordRow)},{userKeys:recordView!.userKeys,readonlyKeys:recordView!.readonlyKeys});
+ displayedRecords=filtered;showGrid({key:stage,label:stageLabels[stage],stage,rows:filtered.map(recordRow)},{userKeys:recordView!.userKeys,readonlyKeys:recordView!.readonlyKeys});
  area.dataset.recordIds=JSON.stringify(filtered.map(r=>r.recordId));message('');
 }
 async function loadRecords(next:ProcurementStage=stage){if(dirty&&!confirm('저장하지 않은 입력을 닫을까요?'))return;const revision=++recordsRevision;area.inert=true;area.setAttribute('aria-busy','true');save.disabled=true;message('불러오는 중…');try{const loaded=native?await rpc<ProcurementRecord[]>('mvp.records',{stage:next}):demoStore.get(next)||demoRecords(next);if(revision!==recordsRevision)return;stage=next;records=loaded;if(!native)demoStore.set(stage,records);dirty=false;isDb=true;heading.textContent='DB';filters.hidden=false;
@@ -93,14 +117,14 @@ async function loadRecords(next:ProcurementStage=stage){if(dirty&&!confirm('저�
  refreshDateChoices();
  tabList.replaceChildren();for(const [key,label]of Object.entries(stageLabels)){const b=button(label,()=>loadRecords(key as ProcurementStage));b.classList.toggle('active',key===stage);tabList.append(b);}showRecords();}catch(error){if(revision===recordsRevision)throw error;}finally{if(revision===recordsRevision){area.inert=false;area.setAttribute('aria-busy','false');save.disabled=!dirty||!native;}}
 }
-async function saveRows(){if(!isDb||!native)return;await settingsQueue;const ids=JSON.parse(area.dataset.recordIds||'[]') as string[];const rows=handle?.rows()||[];if(rows.length!==ids.length)throw new Error('업무 행 추가는 현재 지원하지 않습니다. 입력을 유지합니다.');
+async function saveRows(){if(!isDb||!native||savingRows)return;savingRows=true;area.inert=filters.inert=tabs.inert=true;settingsButton.disabled=true;save.disabled=true;try{await settingsQueue;const ids=JSON.parse(area.dataset.recordIds||'[]') as string[];const rows=handle?.rows()||[];if(rows.length!==ids.length)throw new Error('업무 행 추가는 현재 지원하지 않습니다. 입력을 유지합니다.');
  const changes=rows.map((row,index)=>recordView!.toEdit(records.find(r=>r.recordId===ids[index])!,row));
- await rpc('mvp.edit',{records:changes,userColumns:{stage,keys:userColumnDraft,settingsStoreVersion:settingsVersion}});(settings.userColumns??={})[stage]=userColumnDraft;(confirmedSettings.userColumns??={})[stage]=structuredClone(userColumnDraft);settingsVersion++;dirty=false;await loadRecords();message('저장됨');
+ await rpc('mvp.edit',{records:changes,userColumns:{stage,keys:userColumnDraft,settingsStoreVersion:settingsVersion}});(settings.userColumns??={})[stage]=userColumnDraft;(confirmedSettings.userColumns??={})[stage]=structuredClone(userColumnDraft);settingsVersion++;dirty=false;await loadRecords();message('저장됨');}finally{savingRows=false;area.inert=filters.inert=tabs.inert=false;settingsButton.disabled=false;save.disabled=!dirty||!native;}
 }
 async function collect(){if(!extraction)extraction=extractCapture(await captureCurrentPage(tabId),undefined,settings.screenRules);if(!extraction.observations.length){const text=extraction.warnings.join(' · ')||'등록 화면과 업무키를 확인하세요.';if(window.parent!==window){window.parent.postMessage({kind:'mvp.notice',message:text,error:true},'*');close();return;}message(text,true);return;}
  let preview=await rpc<CollectionPreview>('mvp.preview',{observations:extraction.observations});
  const choices:CollectionDecision[]=[];
- if(preview.conflicts.length){const {d,body}=dialog('값 변경');const checks=new Map<string,HTMLInputElement>();for(const conflict of preview.conflicts){const line=node('div',undefined,'diff');const check=input('신규값 반영','checkbox');checks.set(conflict.recordId+'\0'+conflict.field,check);line.append(check,node('span',settings.dictionary.keys[conflict.field]||conflict.field),node('pre',JSON.stringify(conflict.previous)),node('pre',JSON.stringify(conflict.incoming)));body.append(line);}await new Promise<void>(resolve=>{body.append(button('반영',()=>{for(const c of preview.conflicts)choices.push({recordId:c.recordId,field:c.field,useIncoming:checks.get(c.recordId+'\0'+c.field)!.checked});d.returnValue='apply';d.close();resolve();}));d.addEventListener('close',()=>resolve(),{once:true});});if(d.returnValue!=='apply')return;}
+ if(preview.conflicts.length){const {d,body}=dialog('값 변경');const checks=new Map<string,HTMLInputElement>();for(const conflict of preview.conflicts){const line=node('div',undefined,'diff');const check=input('신규값 반영','checkbox');checks.set(conflict.recordId+'\0'+conflict.field,check);line.append(check,node('span',settings.dictionary.keys[conflict.field]||conflict.field),node('pre',JSON.stringify(conflict.previous)),node('pre',JSON.stringify(conflict.incoming)));if(Object.hasOwn(conflict,'override'))line.append(node('span','정정값 유지: '+JSON.stringify(conflict.override)));body.append(line);}await new Promise<void>(resolve=>{body.append(button('반영',()=>{for(const c of preview.conflicts)choices.push({recordId:c.recordId,field:c.field,useIncoming:checks.get(c.recordId+'\0'+c.field)!.checked});d.returnValue='apply';d.close();resolve();}));d.addEventListener('close',()=>resolve(),{once:true});});if(d.returnValue!=='apply')return;}
  await rpc('mvp.apply',{observations:preview.observations,token:preview.token,decisions:choices});await collectorBridge.sendCollectedData(preview.observations);stage=preview.observations[0].stage;location.search=`mode=db&sourceTabId=${tabId||''}&stage=${stage}`;
 }
 async function trashRows(indices:number[]){if(dirty){message('입력을 저장한 뒤 휴지통으로 이동하세요.');return;}const ids=JSON.parse(area.dataset.recordIds||'[]')as string[];const selected=[...new Set(indices)].map(index=>records.find(r=>r.recordId===ids[index])).filter((r):r is ProcurementRecord=>!!r);if(!selected.length)return;if(native)await rpc('mvp.trash',{records:selected.map(r=>({recordId:r.recordId,storeVersion:r.storeVersion}))});else{demoTrash.set(stage,[...(demoTrash.get(stage)||[]),...selected.map(r=>({...r,storeVersion:r.storeVersion+1}))]);demoStore.set(stage,records.filter(r=>!selected.some(s=>s.recordId===r.recordId)));}await loadRecords();message(`${selected.length}개 행을 휴지통으로 이동했습니다.`);}
@@ -110,32 +134,146 @@ function valueDictionary(selection:{key:string;value:unknown}[]){const{d,body}=d
 function dictionary(body:HTMLElement,kind:'keys'|'values'){
  const table=node('table',undefined,'dictionary-grid '+kind),header=node('tr');for(const text of kind==='keys'?['원본 키','표시명','유형','입력 잠금','']:['원본 키','원값','표시값',''])header.append(node('th',text));table.append(header);
  const entries=kind==='keys'?[...new Set([...Object.keys(settings.dictionary.keys),...Object.keys(settings.columnTypes||{}),...Object.keys(settings.columnLocks||{})])].map(key=>[key,'',settings.dictionary.keys[key]||'']):Object.entries(settings.dictionary.values).flatMap(([key,values])=>Object.entries(values).map(([value,label])=>[key,value,label]));
- for(const[key,value,label]of entries){const row=node('tr'),edit=input('표시명');edit.value=label;edit.onchange=()=>{if(kind==='keys')settings.dictionary.keys={...settings.dictionary.keys,[key]:edit.value};else setDictionaryValue(key,value,edit.value);};for(const text of kind==='keys'?[key]:[key,value])row.append(node('td',text));const cell=node('td');cell.append(edit);row.append(cell);if(kind==='keys'){const typeCell=node('td'),lockCell=node('td'),type=select('유형 '+key,Object.entries(columnTypeLabels),settings.columnTypes?.[key]||'text'),lock=input('입력 잠금 '+key,'checkbox');type.onchange=()=>{settings.columnTypes={...settings.columnTypes,[key]:type.value as MvpColumnType};};lock.checked=settings.columnLocks?.[key]===true;lock.onchange=()=>{settings.columnLocks={...settings.columnLocks,[key]:lock.checked};};typeCell.append(type);lockCell.append(lock);row.append(typeCell,lockCell);}const remove=node('td');remove.append(button('삭제',()=>{if(kind==='keys'){delete settings.dictionary.keys[key];delete settings.columnTypes?.[key];delete settings.columnFormats?.[key];delete settings.columnLocks?.[key];}else delete settings.dictionary.values[key][value];row.remove();}));row.append(remove);table.append(row);}
+ for(const[key,value,label]of entries){const row=node('tr'),edit=input('표시명');edit.value=label;edit.onchange=()=>{if(kind==='keys')settings.dictionary.keys={...settings.dictionary.keys,[key]:edit.value};else setDictionaryValue(key,value,edit.value);};for(const text of kind==='keys'?[key]:[key,value]){const cell=node('td',text);if(kind==='keys'&&['미종결금액','지체일수'].includes(key))cell.append(node('small',key==='미종결금액'?'계산: 계약금액 − 종결금액':'계산: 지정일 − 납품기한','derived-note'));row.append(cell);}const cell=node('td');cell.append(edit);row.append(cell);if(kind==='keys'){const typeCell=node('td'),lockCell=node('td'),type=select('유형 '+key,Object.entries(columnTypeLabels),settings.columnTypes?.[key]||'text'),lock=input('입력 잠금 '+key,'checkbox');type.onchange=()=>{settings.columnTypes={...settings.columnTypes,[key]:type.value as MvpColumnType};};lock.checked=settings.columnLocks?.[key]===true;lock.onchange=()=>{settings.columnLocks={...settings.columnLocks,[key]:lock.checked};};typeCell.append(type);lockCell.append(lock);row.append(typeCell,lockCell);}const remove=node('td');remove.append(button('삭제',()=>{if(kind==='keys'){delete settings.dictionary.keys[key];delete settings.columnTypes?.[key];delete settings.columnFormats?.[key];delete settings.columnLocks?.[key];}else delete settings.dictionary.values[key][value];row.remove();}));row.append(remove);table.append(row);}
  const row=node('tr',undefined,'dictionary-add'),key=input('원본 키'),value=input('원값'),label=input(kind==='keys'?'표시명':'표시값');const cell=(child:HTMLElement)=>{const td=node('td');td.append(child);row.append(td);};cell(key);if(kind==='values')cell(value);cell(label);let type:HTMLSelectElement|undefined,lock:HTMLInputElement|undefined;if(kind==='keys'){type=select('새 열 유형',Object.entries(columnTypeLabels));lock=input('새 열 입력 잠금','checkbox');cell(type);cell(lock);}cell(button('추가',()=>{if(!key.value.trim())throw new Error('원본 키를 입력하세요.');if(kind==='keys'){settings.dictionary.keys={...settings.dictionary.keys,[key.value]:label.value};settings.columnTypes={...settings.columnTypes,[key.value]:type!.value as MvpColumnType};settings.columnLocks={...settings.columnLocks,[key.value]:lock!.checked};}else setDictionaryValue(key.value,value.value,label.value);body.replaceChildren();dictionary(body,kind);}));table.append(row);body.append(table);
 }
-function screenRulesEditor(content:HTMLElement){
- const defaultCheck=input('기본 수집 화면 사용','checkbox');defaultCheck.checked=settings.screenRules===undefined;const label=node('label');label.append(defaultCheck,'기본 수집 화면 사용');content.append(label);const list=node('div',undefined,'screen-rules');content.append(list);
+function screenRulesEditor(content:HTMLElement,draft:{rules:CaptureScreenRule[]}){
+ const defaultCheck=input('기본 수집 조건 사용','checkbox');defaultCheck.checked=settings.screenRules===undefined;const label=node('label');label.append(defaultCheck,'기본 수집 조건 사용');content.append(label,node('p','체크하면 기본 조건으로 수집합니다. 해제하면 사용자 조건을 편집합니다. 저장 후 적용됩니다.','demo-mark'),node('p','기본값은 제공 자료의 화면 코드입니다. 현재 나라장터 화면과의 일치 여부는 별도 확인이 필요합니다.','demo-mark'));const list=node('div',undefined,'screen-rules');content.append(list);
  const render=()=>{list.replaceChildren();const defaults=settings.screenRules===undefined,rules=defaults?structuredClone(defaultScreenRules):settings.screenRules!;const table=node('table',undefined,'dictionary-grid screen-grid'),head=node('tr');for(const text of['업무','URL','areaCd','depth1','depth2','depth3',''])head.append(node('th',text));table.append(head);for(const rule of rules){const row=node('tr'),stageField=select('수집 업무',Object.entries(stageLabels)as[string,string][],rule.stage);stageField.disabled=defaults;stageField.onchange=()=>rule.stage=stageField.value as ProcurementStage;const td=node('td');td.append(stageField);row.append(td);for(const key of['urlPattern','areaCd','depth1','depth2','depth3']as const){const field=input(key==='urlPattern'?'수집 URL':key);field.value=rule[key]||'';field.disabled=defaults;field.oninput=()=>rule[key]=field.value;const cell=node('td');cell.append(field);row.append(cell);}const remove=node('td'),b=button('삭제',()=>{settings.screenRules=rules.filter(r=>r.id!==rule.id);render();});b.disabled=defaults;remove.append(b);row.append(remove);table.append(row);}list.append(table);const add=button('조건 추가',()=>{(settings.screenRules??=[]).push({id:crypto.randomUUID(),stage:'receipt',urlPattern:'https://www.g2b.go.kr/*',areaCd:'',depth1:'',depth2:'',depth3:''});render();});add.disabled=defaults;list.append(add,node('p',defaults?'기본 등록 화면과 원천 업무키를 확인합니다.':'URL의 *는 임의 문자열, 비어 있는 depth3는 모든 값에 일치합니다.','demo-mark'));};
- defaultCheck.onchange=()=>{if(defaultCheck.checked)delete settings.screenRules;else settings.screenRules=structuredClone(defaultScreenRules);render();};render();
+ defaultCheck.onchange=()=>{if(defaultCheck.checked){draft.rules=structuredClone(settings.screenRules||[]);delete settings.screenRules;}else settings.screenRules=structuredClone(draft.rules);render();};render();
 }
 function generalSettings(content:HTMLElement,d:HTMLDialogElement){
  const themeSelect=select('테마',[['light','화이트'],['dark','블랙']],settings.theme);themeSelect.onchange=()=>{settings.theme=themeSelect.value as 'light'|'dark';theme();};const extractionMode=select('추출 범위',[['tables','테이블만'],['all','전체']],settings.extractionMode);extractionMode.onchange=()=>settings.extractionMode=extractionMode.value as 'tables'|'all';content.append(node('div','테마','settings-line'),themeSelect,node('div','추출','settings-line'),extractionMode);
  for(const [key,label]of [['hideEmptyColumns','빈 열 숨김'],['hideUnmappedColumns','사전 미등록 열 숨김'],['hideEmptyTables','빈 테이블 숨김']]as const){const check=input(label,'checkbox');check.checked=!!settings[key];check.onchange=()=>{settings[key]=check.checked;theme();};const l=node('label');l.append(check,label);content.append(node('div',undefined,'settings-line').appendChild(l));}
  const trash=button('휴지통',()=>{d.close();return showTrash();});trash.disabled=!isDb;trash.title=isDb?'현재 업무의 삭제된 행을 복원합니다.':'DB 화면에서 사용할 수 있습니다.';content.append(node('div','데이터','settings-line'),trash);
 }
-function showSettings(){const original=structuredClone(settings);const {d,head,body}=dialog('설정'), navigation=node('nav',undefined,'tabs'), content=node('div',undefined,'settings-content');d.classList.add('settings-dialog');body.append(navigation,content);
- const views:{label:string;render:()=>void}[]=[{label:'일반',render:()=>generalSettings(content,d)},{label:'키 사전',render:()=>dictionary(content,'keys')},{label:'값 사전',render:()=>dictionary(content,'values')},{label:'수집 화면',render:()=>screenRulesEditor(content)},{label:'단축키',render:()=>{for(const [action,label]of [['collect','수집'],['extract','추출'],['db','DB'],['document','문서 연결'],['launcher','런처']]){const line=node('div',undefined,'shortcut-line'),field=input(label);field.value=settings.shortcuts?.[action as keyof NonNullable<MvpSettings['shortcuts']>]||'';field.readOnly=true;field.placeholder='여기서 키를 누르세요';field.onkeydown=e=>{if(e.key==='Tab')return;e.preventDefault();if(e.key==='Escape')return;if(e.key==='Backspace'||e.key==='Delete')field.value='';else if(!['Alt','Shift','Control','Meta'].includes(e.key))field.value=[e.ctrlKey?'Ctrl':'',e.altKey?'Alt':'',e.shiftKey?'Shift':'',e.metaKey?'Meta':'',e.key.toUpperCase()].filter(Boolean).join('+');(settings.shortcuts??={})[action as keyof NonNullable<MvpSettings['shortcuts']>]=field.value;};line.append(node('span',label),field);content.append(line);}content.append(node('p','브라우저 전체 단축키: 확장 프로그램 → 단축키','demo-mark'));}}];
- let current=views[0];for(const view of views)navigation.append(button(view.label,()=>{current=view;content.replaceChildren();view.render();}));current.render();let accepted=false;head.insertBefore(iconButton('save','저장',async()=>{try{await saveSettings();}catch(error){content.replaceChildren();current.render();throw error;}accepted=true;d.close();if(extraction&&mode!=='db')showExtraction();}),head.lastElementChild);d.addEventListener('close',()=>{if(!accepted){settings=original;theme();}});
+async function showSettings(){
+ if(settingsButton.disabled)return;settingsButton.disabled=true;settingsButton.setAttribute('aria-busy','true');
+ try{let queued:Promise<void>;do{queued=settingsQueue;await queued.catch(()=>{});}while(queued!==settingsQueue);}
+ finally{settingsButton.disabled=false;settingsButton.removeAttribute('aria-busy');}
+ const original=structuredClone(settings),screenDraft={rules:structuredClone(settings.screenRules??defaultScreenRules)};const {d,head,body}=dialog('설정'), navigation=node('nav',undefined,'tabs'), content=node('div',undefined,'settings-content');d.classList.add('settings-dialog');body.append(navigation,content);
+ const views:{label:string;render:()=>void}[]=[{label:'일반',render:()=>generalSettings(content,d)},{label:'키 사전',render:()=>dictionary(content,'keys')},{label:'값 사전',render:()=>dictionary(content,'values')},{label:'수집 화면',render:()=>screenRulesEditor(content,screenDraft)},{label:'단축키',render:()=>{for(const [action,label]of [['collect','수집'],['extract','추출'],['db','DB'],['document','문서 연결'],['launcher','런처 추가창']]){const line=node('div',undefined,'shortcut-line'),field=input(label);field.value=settings.shortcuts?.[action as keyof NonNullable<MvpSettings['shortcuts']>]||'';field.readOnly=true;field.placeholder='여기서 키를 누르세요';field.onkeydown=e=>{if(e.key==='Tab')return;e.preventDefault();if(e.key==='Escape')return;if(e.key==='Backspace'||e.key==='Delete')field.value='';else if(!['Alt','Shift','Control','Meta'].includes(e.key))field.value=[e.ctrlKey?'Ctrl':'',e.altKey?'Alt':'',e.shiftKey?'Shift':'',e.metaKey?'Meta':'',e.key.toUpperCase()].filter(Boolean).join('+');(settings.shortcuts??={})[action as keyof NonNullable<MvpSettings['shortcuts']>]=field.value;};line.append(node('span',label),field);content.append(line);}content.append(node('p','런처 단축키는 추가 창을 엽니다. 저장된 버튼은 리모컨에서 각각 실행합니다.','demo-mark'),node('p','브라우저 전체 단축키: 확장 프로그램 → 단축키','demo-mark'));}}];
+ views.push({label:'문서 연결',render:()=>{void documentSettings(content).catch(error=>{if(content.isConnected)content.append(node('p',String(error instanceof Error?error.message:error)));});}});
+ views.push({label:'공유 설정',render:()=>renderSharedSettingsPanel(content,{getSettings:()=>settings,setDraft:next=>{settings=next;},onNotice:message})});
+ let current=views[0];for(const view of views)navigation.append(button(view.label,()=>{current=view;content.replaceChildren();view.render();}));current.render();let accepted=false,saving=false;
+ head.insertBefore(iconButton('save','저장',async()=>{
+  if(saving)return;saving=true;const draft=structuredClone(settings);body.inert=true;head.querySelectorAll('button').forEach(b=>b.disabled=true);
+  try{await saveSettings();accepted=true;d.close();if(extraction&&mode!=='db')showExtraction();}
+  catch(error){settings=draft;content.replaceChildren();current.render();content.prepend(node('p','저장하지 못했습니다. 작성한 설정은 유지됩니다. 다시 저장하거나 닫을 수 있습니다.','error'));throw error;}
+  finally{saving=false;body.inert=false;head.querySelectorAll('button').forEach(b=>b.disabled=false);}
+ }),head.lastElementChild);
+ d.addEventListener('cancel',event=>{if(saving)event.preventDefault();});
+ d.addEventListener('close',()=>{if(!accepted){const changed=JSON.stringify(settings)!==JSON.stringify(original);settings=original;if(changed)theme();}});
 }
 function showLauncher(){
  destroyGrid();settingsButton.hidden=toolbar.hidden=filters.hidden=tabs.hidden=true;shell.classList.add('launcher-shell');heading.textContent='런처 추가';const label=input('버튼 이름'),script=node('textarea');label.placeholder='버튼 이름';script.placeholder='JavaScript';script.setAttribute('aria-label','JavaScript');const editor=node('div',undefined,'launcher-editor');
  const add=button('저장',async()=>{if(add.disabled)return;if(!label.value.trim()||!script.value.trim())throw new Error('이름과 스크립트를 입력하세요.');const launcher={id:crypto.randomUUID(),label:label.value.trim(),script:script.value};add.disabled=true;settings.launchers=[...settings.launchers,launcher];try{await saveSettings();label.value=script.value='';message('버튼 추가됨');}catch(error){settings.launchers=settings.launchers.filter(item=>item.id!==launcher.id);theme();throw error;}finally{add.disabled=false;}});add.classList.add('primary');editor.append(label,script,add);area.append(editor);
 }
-function documentBridge(){destroyGrid();toolbar.hidden=filters.hidden=tabs.hidden=true;heading.textContent='문서 연결';const source=extraction?.raw||records;area.append(button('JSON 전달 파일',()=>download(JSON.stringify(documentPayload(source),null,2),'document-input.json')));}
+async function availableDocumentProfiles(){
+ if(!native)throw new Error('문서 생성은 확장 프로그램과 Studio lite 연결이 필요합니다.');
+ return(await rpc<{profiles:DocumentProfile[]}>('mvp.document.profiles')).profiles;
+}
+async function documentSettings(content:HTMLElement){
+ const block=node('div');content.append(block);block.append(node('p','Studio lite에서 저장한 서식을 업무에 연결합니다. 서식과 저장 폴더는 Studio lite의 Helper 연결에서 관리합니다.'));
+ let profiles:DocumentProfile[];
+ try{profiles=await availableDocumentProfiles();}catch(error){if(block.isConnected)block.append(node('p',error instanceof Error?error.message:String(error)));return;}
+ if(!block.isConnected)return;
+ for(const [key,label]of Object.entries(stageLabels)){
+  const current=settings.documentProfiles?.[key as ProcurementStage]||'';
+  const choices:[string,string][]=[['','연결 안 함'],...profiles.map(p=>[p.id,p.label]as[string,string])];
+  if(current&&!profiles.some(p=>p.id===current))choices.push([current,'연결된 서식을 찾을 수 없음']);
+  const field=select(label+' 생성 서식',choices,current);field.onchange=()=>{const next={...settings.documentProfiles};if(field.value)next[key as ProcurementStage]=field.value;else delete next[key as ProcurementStage];settings.documentProfiles=next;};
+  block.append(node('label',label),field);
+ }
+ if(!profiles.length)block.append(node('p','Studio lite에서 먼저 Helper 연결 서식을 등록하세요.'));
+}
+let unconfirmedDocumentRequest:{requestId:string;payload:DocumentRequest}|undefined;
+async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen'|'db'}){
+ if(generateButton.disabled)return;
+ const resume=unconfirmedDocumentRequest;
+ const explicit=structuredClone(resume?.payload.items||entry?.items);
+ const selected=explicit?explicit.map((item,sourceIndex)=>({sourceIndex,row:item.fields})):structuredClone(handle?.getSelectedRows()||[]);if(!selected.length)throw new Error('생성할 행의 셀을 선택하세요.');
+ const kind=resume?.payload.sourceKind||entry?.sourceKind||(isDb?'db':'screen'),selectedStage=explicit?.[0]?.stage||(isDb?stage:activeView?.stage);
+ if(explicit&&explicit.some(item=>item.stage!==selectedStage))throw new Error('같은 업무의 자료를 선택하세요.');
+ if(!explicit&&!activeView)throw new Error('생성할 표를 확인하세요.');
+ const context=isDb?{kind:'db' as const,records:structuredClone(records),recordIds:JSON.parse(area.dataset.recordIds||'[]') as string[],view:recordView!}:{kind:'screen' as const,view:structuredClone(activeView!)};
+ // Capture edited DB values before profile loading or any other asynchronous work.
+ const fixedItems=explicit||(context.kind==='db'?documentItems(selected,context):selectedStage?documentItems(selected,{...context,stage:selectedStage}):undefined);
+ generateButton.disabled=true;
+ const {d,body}=dialog('문서 생성');d.classList.add('document-dialog');d.addEventListener('close',()=>{generateButton.disabled=false;});
+ let busy=false;const closeButton=d.querySelector<HTMLButtonElement>('.titlebar button')!;
+ d.addEventListener('cancel',event=>{if(busy)event.preventDefault();});
+ const summary=node('p'),detail=node('div',undefined,'document-candidates'),choices:HTMLInputElement[]=[];
+ const stageField=select('생성 업무',[['','업무 선택'],...Object.entries(stageLabels)]as[string,string][],selectedStage);stageField.disabled=!!selectedStage;
+ for(const [index,entry]of selected.entries()){
+  const choice=input(`자료 ${index+1} 선택`,'checkbox');choice.checked=selected.length<=100;choice.disabled=!!resume;choices.push(choice);
+  const item=fixedItems?.[index],identity=item?.identity||[];
+  const values=Object.values(entry.row).filter(v=>(typeof v==='string'||typeof v==='number'||typeof v==='boolean')&&!identity.includes(String(v))).slice(0,3);
+  const description=[...(item?[stageLabels[item.stage],identity.join(' / ')]:[]),...values.map(String)].join(' · ');
+  const label=node('label'),text=node('span',description.slice(0,240)||`자료 ${index+1}`);text.title=description;label.append(choice,text);detail.append(label);
+ }
+ let profileReady=!!resume;
+ const refreshSelection=()=>{const count=choices.filter(c=>c.checked).length;summary.textContent=`${kind==='db'?'DB':'현재 화면'} 자료 ${selected.length}건 · 선택 ${count}건`;run.disabled=!profileReady||count===0||count>100;};
+ const connection=node('div'),resultArea=node('div'),run=button('생성',async()=>{
+  if(run.disabled)return;
+  if(!pending){
+   const chosenStage=stageField.value as ProcurementStage,profileId=settings.documentProfiles?.[chosenStage];if(!profileId)throw new Error('업무에 연결할 서식을 선택하세요.');
+   const items=fixedItems||documentItems(selected,context.kind==='db'?context:{...context,stage:chosenStage});
+   const chosen=items.filter((_,index)=>choices[index].checked);if(!chosen.length||chosen.length>100)throw new Error('생성할 자료를 1~100건 선택하세요.');
+   pending={requestId:crypto.randomUUID(),payload:{profileId,sourceKind:kind,items:chosen}};
+  }
+  run.disabled=true;busy=true;closeButton.disabled=true;stageField.disabled=true;choices.forEach(choice=>choice.disabled=true);resultArea.replaceChildren(node('p','생성 중…'));
+  try{
+   unconfirmedDocumentRequest=pending;
+   const result=await rpc<DocumentResult>('mvp.document.generate',pending.payload as unknown as Record<string,unknown>,pending.requestId);
+   unconfirmedDocumentRequest=undefined;
+   resultArea.replaceChildren(node('p',result.status==='success'?`${result.results.length}건 저장 완료`:'일부 자료는 확인이 필요합니다.'));
+   for(const item of result.results)resultArea.append(node('p',`${item.itemIndex+1}. ${item.status==='success'?item.path:item.message||'생성하지 못했습니다.'}`));
+   if(result.status==='success'){run.textContent='완료';message(`${result.results.length}건 문서 저장 완료`);}
+   else{run.textContent='같은 요청 다시 시도';run.disabled=false;resultArea.append(node('p','값·서식을 보완한 뒤 새로 생성하려면 이 창을 닫고 자료를 다시 선택하세요.'));}
+  }catch(error){resultArea.replaceChildren(node('p',error instanceof Error?error.message:String(error)));run.textContent='같은 요청 다시 시도';run.disabled=false;}
+  finally{busy=false;closeButton.disabled=false;}
+ });
+ let pending=resume;
+ const connect=async()=>{
+  connection.replaceChildren();profileReady=false;refreshSelection();const chosenStage=stageField.value as ProcurementStage;if(!chosenStage)return;
+  if(!native)throw new Error('문서 생성은 확장 프로그램에서 사용할 수 있습니다.');
+  const generationKey=chosenStage,profiles=await availableDocumentProfiles();if(!d.open||stageField.value!==generationKey)return;
+  const current=settings.documentProfiles?.[chosenStage],profile=profiles.find(p=>p.id===current);
+  if(profile){connection.append(node('p','서식: '+profile.label));profileReady=true;resultArea.replaceChildren();refreshSelection();return;}
+  connection.append(node('p','이 업무에 사용할 서식을 한 번 연결하세요.'));
+  const choice=select('연결할 서식',[['','서식 선택'],...profiles.map(p=>[p.id,p.label]as[string,string])]);
+  connection.append(choice,button('서식 연결 저장',async()=>{if(!choice.value)throw new Error('서식을 선택하세요.');settings.documentProfiles={...settings.documentProfiles,[chosenStage]:choice.value};await saveSettings();await connect();}));
+  if(!profiles.length)connection.append(node('p','Studio lite의 Helper 연결에서 서식을 먼저 등록하세요.'));
+ };
+ const connectFailure=(error:unknown)=>{resultArea.replaceChildren(node('p',error instanceof Error?error.message:String(error)),button('연결 다시 확인',()=>connect().catch(connectFailure)));};
+ stageField.onchange=()=>{void connect().catch(connectFailure);};
+ choices.forEach(choice=>choice.onchange=refreshSelection);
+ body.append(summary,detail);if(selected.length>100)body.append(node('p','한 번에 100건까지 선택하세요.'));
+ body.append(stageField,connection,run,resultArea);refreshSelection();
+ if(resume){connection.append(node('p','이전 요청의 저장 결과를 확인하지 못했습니다. 새 자료를 보내기 전에 같은 요청의 결과를 확인합니다.'));stageField.disabled=true;run.textContent='같은 요청 다시 시도';}
+ else await connect().catch(connectFailure);
+}
+async function documentDb(reason:string){
+ toolbar.hidden=tabs.hidden=false;heading.textContent='DB';
+ const stages=new Set(extraction?.views.map(view=>view.stage).filter(Boolean));const suggested=stages.size===1?[...stages][0]!:stage;
+ try{await loadRecords(suggested);message(reason);}
+ catch(error){destroyGrid();area.append(node('p',reason,'empty'),node('p',error instanceof Error?error.message:String(error),'empty'),button('DB 다시 불러오기',()=>documentDb(reason)));message('DB를 불러오지 못했습니다.',true);}
+}
+async function documentBridge(){
+ const items=screenDocumentItems(extraction?.observations||[]);
+ if(!items.length){await documentDb(extraction?.warnings.length?'현재 화면의 업무 자료를 확인할 수 없습니다. DB에서 자료를 선택하세요.':'현재 화면에 연결된 자료가 없습니다. DB에서 자료를 선택하세요.');return;}
+ isDb=false;heading.textContent='문서 생성';toolbar.hidden=tabs.hidden=true;destroyGrid();
+ const start=node('div',undefined,'document-start');start.append(node('p',`현재 화면에서 ${items.length}건을 읽었습니다.`),button('자료 다시 선택',()=>generateDocuments({items,sourceKind:'screen'})),button('DB에서 선택',()=>documentDb('DB에서 자료를 선택하고 생성 버튼을 누르세요.')));area.append(start);message('');
+ await generateDocuments({items,sourceKind:'screen'});
+}
 function demoRecords(type:ProcurementStage):ProcurementRecord[]{const identityKeys={receipt:['ctrtDmndRcptNo','ctrtDmndRcptOrd'],bid:['bidPbancNo','bidPbancOrd'],contract:['ctrtNo','ctrtChgOrd']}[type];return Array.from({length:24},(_,i)=>({stage:type,identity:[`SAMPLE-${String(i+1).padStart(3,'0')}`,'01'],recordId:'sample-'+i,storeVersion:1,fields:{[identityKeys[0]]:`SAMPLE-${String(i+1).padStart(3,'0')}`,[identityKeys[1]]:'01',사업명:'회의실 물품 구매 '+(i+1),수량:i===0?0:i,완료:false,ctrtAmt:'35608652.5',ctrtDt:dateText(today).replaceAll('.',''),dlvgdsTermYmd:'20261027',빈열:'',비고:{검토:['규격','수량']}},children:[{key:'items',label:'물품',kind:'items',rows:[{품명:'복합기',수량:1,단가:'35608652.5'}]}],source:{url:'https://www.g2b.go.kr/',areaCd:'14',depth1:'01570',depth2:'01571',framePath:'top'},rawJson:'{"sample":true}',capturedAt:'2026-10-01T00:00:00Z',userValues:type==='contract'?{종결:i===2,지정일:'20261101',종결금액:'1000',선금보증기한:'',선금보증금액:''}:{담당:'예시'}}));}
-async function boot(){if(native){try{const response=await rpc<{settings:MvpSettings;storeVersion:number}>('mvp.settings.read',{});settings=response.settings;settingsVersion=response.storeVersion;}catch(error){fail(error);}}settings.columnTypes={...defaultColumnTypes,...settings.columnTypes};confirmedSettings=structuredClone(settings);theme();
+async function boot(){if(native){try{const response=await rpc<{settings:MvpSettings;storeVersion:number}>('mvp.settings.read',{});settings=response.settings;settingsVersion=response.storeVersion;}catch(error){fail(error);}}settings.hideEmptyColumns??=true;settings.hideEmptyTables??=true;settings.columnTypes={...defaultColumnTypes,...settings.columnTypes};confirmedSettings=structuredClone(settings);theme();
  if(mode==='db'){stage=(params.get('stage')||'receipt') as ProcurementStage;if(!Object.hasOwn(stageLabels,stage))stage='receipt';await loadRecords(stage);}
- else if(mode==='launcher')showLauncher();else if(mode==='settings')showSettings();else{const contractDemo=demoRecords('contract'),demoView=new RecordView(contractDemo,'contract',settings);extraction=native?extractCapture(await captureCurrentPage(tabId),undefined,settings.screenRules):extractCapture({pointInfo:{areaCd:'14',depth1:'01570',depth2:'01571',depth3:'01579'},tables:{접수목록:demoRecords('receipt').map(r=>r.fields),계약목록:contractDemo.map(r=>demoView.toRow(r)),빈표:[]}},undefined,settings.screenRules);if(mode==='collect')await collect();else{showExtraction();if(mode==='document')documentBridge();}}}
+ else if(mode==='launcher')showLauncher();else if(mode==='settings')showSettings();else{const contractDemo=demoRecords('contract'),demoView=new RecordView(contractDemo,'contract',settings);
+  try{extraction=native?extractCapture(await captureCurrentPage(tabId),undefined,settings.screenRules):extractCapture({pointInfo:{areaCd:'14',depth1:'01570',depth2:'01571',depth3:'01579'},tables:{접수목록:demoRecords('receipt').map(r=>r.fields),계약목록:contractDemo.map(r=>demoView.toRow(r)),빈표:[]}},undefined,settings.screenRules);}
+  catch(error){if(mode!=='document')throw error;await documentDb('현재 화면을 읽지 못했습니다. DB에서 자료를 선택하세요.');status.title+=' '+(error instanceof Error?error.message:String(error));return;}
+  if(mode==='collect')await collect();else if(mode==='document')await documentBridge();else showExtraction();}}
 window.addEventListener('keydown',event=>{if(event.key==='Escape'&&!event.defaultPrevented&&!document.querySelector('dialog[open]')){event.preventDefault();close();}});
 window.addEventListener('beforeunload',event=>{rememberView();if(dirty){event.preventDefault();event.returnValue='';}});
-void boot().catch(fail);
+void boot().then(()=>native?updatePendingNotice().catch(()=>{}):undefined).catch(fail);

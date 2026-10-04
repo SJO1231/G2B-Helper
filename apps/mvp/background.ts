@@ -1,9 +1,10 @@
 import { collectPage, mergeFrameCaptures, type PageCapture } from '../../plugins/collector/extractor';
 import { performWorkAction, type WorkActionRequest, type WorkActionResult } from '../../plugins/page-actions/index';
 import type { MvpEnvelope, MvpResponse } from './contracts';
+import { createPendingWrites, trackedWrites } from './pending-write';
 
 export const NATIVE_HOST = 'com.sjo1231.g2b_helper';
-const commands = new Set(['mvp.health', 'mvp.preview', 'mvp.apply', 'mvp.records', 'mvp.edit', 'mvp.trash', 'mvp.restore', 'mvp.settings.read', 'mvp.settings.save']);
+const commands = new Set(['mvp.health', 'mvp.preview', 'mvp.apply', 'mvp.records', 'mvp.edit', 'mvp.trash', 'mvp.restore', 'mvp.settings.read', 'mvp.settings.save', 'mvp.document.profiles', 'mvp.document.generate', 'mvp.corrections.reset', 'mvp.request.status']);
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const failure = (error: unknown): string => error instanceof Error ? error.message : String(error);
 export function isG2bUrl(value?: string): boolean {
@@ -69,7 +70,7 @@ export function createNativeClient(runtime: NativeRuntime, limits: NativeLimits 
         try {
           if (new TextEncoder().encode(JSON.stringify(envelope)).byteLength > maxRequest) throw new Error('Native 요청 전체 크기 한도를 초과했습니다.');
           const connection = connect();
-          const timer = setTimeout(() => finish(envelope.requestId, undefined, new Error('Native 응답 시간 초과. 동일 요청 ID로 재시도하세요.')), limits.timeoutMs ?? 45000);
+          const timer = setTimeout(() => finish(envelope.requestId, undefined, new Error('Native 응답 시간 초과. 동일 요청 ID로 재시도하세요.')), limits.timeoutMs ?? (envelope.command === 'mvp.document.generate' ? 150000 : 45000));
           waiting.set(envelope.requestId, { resolve, reject, timer, parts: new Map(), bytes: 0 });
           connection.postMessage(envelope);
         } catch (error) { if (waiting.has(envelope.requestId)) finish(envelope.requestId, undefined, new Error(failure(error))); else reject(new Error(failure(error))); }
@@ -79,7 +80,17 @@ export function createNativeClient(runtime: NativeRuntime, limits: NativeLimits 
   };
 }
 
-export interface MvpBrowser { runtime: typeof chrome.runtime; tabs: typeof chrome.tabs; scripting: typeof chrome.scripting; userScripts?: typeof chrome.userScripts; }
+export interface MvpBrowser { runtime: typeof chrome.runtime; tabs: typeof chrome.tabs; scripting: typeof chrome.scripting; userScripts?: typeof chrome.userScripts; storage?: typeof chrome.storage; }
+const pendingClients = new WeakMap<object, ReturnType<typeof createPendingWrites>>();
+function pendingClient(api: MvpBrowser, native: ReturnType<typeof createNativeClient>) {
+  let client = pendingClients.get(api);
+  if (!client) {
+    if (!api.storage?.session) throw new Error('확장을 다시 로드하여 저장 복구 기능을 준비하세요.');
+    client = createPendingWrites(api.storage.session, request => native.request(request));
+    pendingClients.set(api, client);
+  }
+  return client;
+}
 async function tabFor(api: MvpBrowser, explicit?: number): Promise<chrome.tabs.Tab> {
   if (explicit !== undefined && (!Number.isSafeInteger(explicit) || explicit < 0)) throw new Error('원본 페이지 탭 ID를 확인하세요.');
   const tab = explicit === undefined ? (await api.tabs.query({ active: true, lastFocusedWindow: true }))[0] : await api.tabs.get(explicit);
@@ -143,10 +154,17 @@ export async function handleMvpMessage(api: MvpBrowser, native: ReturnType<typeo
   const widget = sender.tab?.id !== undefined && isG2bUrl(sender.url);
   if (sender.id !== api.runtime.id || (!extensionPage && !widget)) throw new Error('G2B Helper 확장 화면에서만 실행할 수 있습니다.');
   const tabId = widget && !extensionPage ? sender.tab!.id : message.tabId as number | undefined;
+  if (message.kind === 'mvp.pending.read' || message.kind === 'mvp.pending.recover') {
+    if (!extensionPage) throw new Error('Helper 기능창에서 저장 결과를 확인하세요.');
+    const client = pendingClient(api, native);
+    if (message.kind === 'mvp.pending.read') return { result: await client.read() ?? null };
+    if (message.requestId !== undefined && typeof message.requestId !== 'string') throw new Error('확인할 요청 번호가 올바르지 않습니다.');
+    return { result: await client.recover(message.requestId as string | undefined, message.retry === true) };
+  }
   if (message.kind === 'mvp.rpc') {
     if (!validRequest(message.envelope)) throw new Error('MVP Gateway 요청 형식을 확인하세요.');
     if (['mvp.preview', 'mvp.apply'].includes(message.envelope.command)) await tabFor(api, tabId);
-    try { return await native.request(message.envelope); }
+    try { return await (trackedWrites.has(message.envelope.command) ? pendingClient(api, native).request(message.envelope) : native.request(message.envelope)); }
     catch (error) { throw Object.assign(new Error(failure(error)), { nativeTransport: true }); }
   }
   if (message.kind === 'mvp.context') return { result: { tabId: (await tabFor(api, tabId)).id } };

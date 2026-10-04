@@ -90,7 +90,7 @@ const textFilter = async (title, mode, terms) => {
   await mainGrid().getByLabel('검색값 목록', { exact: true }).fill(terms);
   await mainGrid().locator('.mvp-grid-panel').getByRole('button', { name: '적용', exact: true }).click();
 };
-const clearFilters = () => mainGrid().locator('.mvp-grid-toolbar').getByRole('button', { name: '열 필터 해제', exact: true }).click();
+const clearFilters = () => page.locator('.tab-actions').getByRole('button', { name: '열 필터 해제', exact: true }).click();
 const editor = () => mainGrid().getByLabel('셀 편집', { exact: true });
 const selectWithoutEditing = async title => {
   await (await cell(title)).click();
@@ -147,19 +147,18 @@ try {
     await mainGrid().getByLabel('필터 값 검색', { exact: true }).fill('0001'); await mainGrid().getByLabel('0001', { exact: true }).check();
     await mainGrid().locator('.mvp-grid-panel').getByRole('button', { name: '적용', exact: true }).click(); await waitRows(1); await clearFilters(); await waitRows(4);
   });
-  await check('multi-text includes/exclude, value selection and multiple-column AND/OR', async () => {
+  await check('multi-text includes/exclude, value selection and multiple-column AND', async () => {
     await textFilter('code', 'includes', '0001\n0002'); await waitRows(2);
     await openFilter('flag'); await mainGrid().getByLabel('검색된 값 전체 선택', { exact: true }).uncheck(); await mainGrid().getByLabel('필터 값 검색', { exact: true }).fill('false'); await mainGrid().getByLabel('false', { exact: true }).check(); await mainGrid().locator('.mvp-grid-panel').getByRole('button', { name: '적용', exact: true }).click(); await waitRows(1);
-    await mainGrid().getByLabel('여러 열 필터 결합').selectOption('or'); await waitRows(3);
-    await mainGrid().getByLabel('여러 열 필터 결합').selectOption('and');
+    await expect(mainGrid().getByLabel('여러 열 필터 결합')).toHaveCount(0);
     await textFilter('code', 'exclude', '0001'); await waitRows(1); await clearFilters(); await waitRows(4);
   });
   await check('hidden columns: restore empty source column and hide/restore from header menu', async () => {
-    await mainGrid().getByRole('button', { name: '숨김 열', exact: true }).click(); await mainGrid().getByLabel('blank 표시', { exact: true }).check();
+    await mainGrid().getByRole('button', { name: '속성', exact: true }).click(); await mainGrid().getByLabel('blank 표시', { exact: true }).check();
     await mainGrid().locator('.mvp-grid-panel').getByRole('button', { name: '닫기', exact: true }).click(); await expect(await header('blank')).toBeVisible();
     await (await header('code')).click({ button: 'right' }); await mainGrid().locator('.tabulator-menu').getByText('열 숨기기', { exact: true }).click();
     await expect(await header('code')).not.toBeVisible();
-    await mainGrid().getByRole('button', { name: '숨김 열', exact: true }).click(); await mainGrid().getByLabel('code 표시', { exact: true }).check();
+    await mainGrid().getByRole('button', { name: '속성', exact: true }).click(); await mainGrid().getByLabel('code 표시', { exact: true }).check();
     await mainGrid().locator('.mvp-grid-panel').getByRole('button', { name: '닫기', exact: true }).click(); await expect(await header('code')).toBeVisible();
   });
   await check('column money/date type formatting leaves all source values unchanged', async () => {
@@ -169,7 +168,7 @@ try {
     }
     await expect(await cell('amount')).toHaveText('12,345,678,901,234,567,890.123456789'); await expect(await cell('date')).toHaveText('2026.10.01');
     await (await cell('date')).dblclick(); await expect(editor()).toBeVisible(); await editor().fill('2026.02.30'); await editor().press('Enter');
-    await expect(editor()).toBeVisible(); await expect(page.locator('.shell > .status')).toContainText('유효한');
+    await expect(editor()).toBeVisible(); await expect(page.locator('.shell .status')).toContainText('유효한');
     await editor().press('Escape'); await expect(await cell('date')).toHaveText('2026.10.01');
   });
   await check('scroll to worksheet padding: all empty region rows have numbers', async () => {
@@ -201,7 +200,7 @@ try {
     await page.locator('dialog[open]').getByLabel('테마', { exact: true }).selectOption('light'); await page.locator('dialog[open]').getByRole('button', { name: '저장', exact: true }).click();
   });
   await check('user column add/hide/show/delete and display-name source key immutability', async () => {
-    await mainGrid().getByRole('button', { name: '+ 사용자 열', exact: true }).click(); await mainGrid().getByLabel('사용자 열 이름').fill('메모');
+    await mainGrid().getByRole('button', { name: '속성', exact: true }).click(); await mainGrid().getByRole('button', { name: '사용자 열 추가', exact: true }).click(); await mainGrid().getByLabel('사용자 열 이름').fill('메모');
     await mainGrid().locator('.mvp-grid-panel').getByRole('button', { name: '추가', exact: true }).click(); await expect(await header('메모')).toBeVisible();
     await page.getByRole('button', { name: '사용자 열 숨김', exact: true }).click(); await expect(await header('메모')).not.toBeVisible();
     await page.getByRole('button', { name: '사용자 열 숨김', exact: true }).click(); await expect(await header('메모')).toBeVisible();
@@ -212,7 +211,7 @@ try {
   });
   await check('empty-table user column metadata survives switching views before any cell is populated', async () => {
     const tabs = page.locator('.shell > .tabs'); await tabs.getByRole('button', { name: '빈 표', exact: true }).click(); await waitRows(0);
-    await mainGrid().getByRole('button', { name: '+ 사용자 열', exact: true }).click(); await mainGrid().getByLabel('사용자 열 이름').fill('빈 사용자 열');
+    await mainGrid().getByRole('button', { name: '속성', exact: true }).click(); await mainGrid().getByRole('button', { name: '사용자 열 추가', exact: true }).click(); await mainGrid().getByLabel('사용자 열 이름').fill('빈 사용자 열');
     await mainGrid().locator('.mvp-grid-panel').getByRole('button', { name: '추가', exact: true }).click(); await expect(await header('빈 사용자 열')).toBeVisible(); await waitRows(0);
     await tabs.getByRole('button', { name: '합성 표', exact: true }).click(); await waitRows(4);
     await tabs.getByRole('button', { name: '빈 표', exact: true }).click(); await waitRows(0); await expect(await header('빈 사용자 열')).toBeVisible();

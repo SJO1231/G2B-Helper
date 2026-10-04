@@ -59,6 +59,26 @@ class MvpTests(unittest.TestCase):
         current['settings'].update(changes)
         return self.call('mvp.settings.save', current)
 
+    def test_empty_display_defaults_and_explicit_false_survive_restart(self):
+        settings = self.call('mvp.settings.read')['result']['settings']
+        self.assertTrue(settings['hideEmptyColumns'])
+        self.assertTrue(settings['hideEmptyTables'])
+        saved = self.update_settings(hideEmptyColumns=False, hideEmptyTables=False)['result']
+        self.gateway.close(); self.gateway = MvpGateway(self.path)
+        self.assertEqual(self.call('mvp.settings.read')['result'], saved)
+        self.assertFalse(saved['settings']['hideEmptyColumns'])
+        self.assertFalse(saved['settings']['hideEmptyTables'])
+
+    def test_missing_empty_display_defaults_do_not_rewrite_stored_settings(self):
+        settings = self.call('mvp.settings.read')['result']['settings']
+        del settings['hideEmptyColumns']; del settings['hideEmptyTables']
+        self.gateway.db.execute('UPDATE mvp_settings SET payload=?', (json.dumps(settings),))
+        before = tuple(self.gateway.db.execute('SELECT store_version,payload FROM mvp_settings').fetchone())
+        read = self.call('mvp.settings.read')['result']
+        self.assertTrue(read['settings']['hideEmptyColumns'])
+        self.assertTrue(read['settings']['hideEmptyTables'])
+        self.assertEqual(tuple(self.gateway.db.execute('SELECT store_version,payload FROM mvp_settings').fetchone()), before)
+
     def test_trash_restore_preserves_raw_user_values_and_restart(self):
         self.save([observation('contract')])
         record = self.records('contract')[0]

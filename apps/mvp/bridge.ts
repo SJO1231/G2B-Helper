@@ -42,6 +42,8 @@ export async function rpc<T = unknown>(command: MvpRpcCommand, payload: Record<s
   throw error;
 }
 export function captureCurrentPage(tabId?: number): Promise<PageCapture> { return message<PageCapture>({ kind: 'mvp.capture' }, tabId); }
+export function pendingWrite(): Promise<import('./pending-write').PendingWrite | null> { return message({ kind: 'mvp.pending.read' }); }
+export function recoverWrite(requestId?: string, retry = false): Promise<import('./pending-write').RecoveryResult> { return message({ kind: 'mvp.pending.recover', requestId, retry }); }
 export function runWorkAction(request: WorkActionRequest, tabId?: number): Promise<WorkActionResult> { return message<WorkActionResult>({ kind: 'mvp.work', request }, tabId); }
 export function runLauncher(script: string, tabId?: number): Promise<unknown> { return message({ kind: 'mvp.launch', script }, tabId); }
 export function currentContext(tabId?: number): Promise<{ tabId: number }> { return message({ kind: 'mvp.context' }, tabId); }

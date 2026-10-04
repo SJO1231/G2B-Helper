@@ -167,7 +167,7 @@ export function extractCapture(raw: unknown, sourceUrl?: string, screenRules?: C
       const initial = key; let suffix = 2;
       while (usedKeys.has(key)) key = initial + '#' + suffix++;
       usedKeys.add(key);
-      views.push({ key, label: tableKey, ...(stage ? { stage } : {}), rows: copy(rows) });
+      views.push({ key, label: tableKey, ...(stage ? { stage } : {}), rows: copy(rows), source: { url: unit.url, framePath: unit.framePath, areaCd: String(unit.pointInfo.areaCd ?? ''), depth1: String(unit.pointInfo.depth1 ?? ''), depth2: String(unit.pointInfo.depth2 ?? ''), ...(unit.pointInfo.depth3 === undefined ? {} : { depth3: String(unit.pointInfo.depth3) }) } });
     }
     const observations = observe(unit, warnings, capturedAt, screenRules);
     if (observations.length) groups.push(observations);
@@ -195,7 +195,7 @@ export function extractionViews(result: ExtractionResult, mode: MvpSettings['ext
     while (used.has(key)) key = initial + '#' + suffix++;
     used.add(key);
     const stage = structuralStage(unit);
-    tables.push({ key, label: 'pointInfo (' + unit.framePath + ')', ...(stage ? { stage } : {}), rows: [copy(unit.pointInfo)] });
+    tables.push({ key, label: 'pointInfo (' + unit.framePath + ')', ...(stage ? { stage } : {}), rows: [copy(unit.pointInfo)], source: { url: unit.url, framePath: unit.framePath, areaCd: String(unit.pointInfo.areaCd ?? ''), depth1: String(unit.pointInfo.depth1 ?? ''), depth2: String(unit.pointInfo.depth2 ?? ''), ...(unit.pointInfo.depth3 === undefined ? {} : { depth3: String(unit.pointInfo.depth3) }) } });
   }
   return tables;
 }

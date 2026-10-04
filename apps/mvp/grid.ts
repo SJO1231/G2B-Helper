@@ -36,7 +36,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
   const model = new GridModel(options.rows, options.userColumnKeys);
   const initial = model.encode(options.rows);
   const saved = options.viewState;
-  const view: GridView = { search: saved?.search || '', combine: saved?.combine || 'and', filters: new Map(saved?.filters.filter(([key]) => model.columns.some(column => column.key === key))) };
+  const view: GridView = { search: saved?.search || '', combine: 'and', filters: new Map(saved?.filters.filter(([key]) => model.columns.some(column => column.key === key))) };
   let rowFilter: ((row: JsonRow) => boolean) | undefined;
   const visibility = new Map<string, boolean>();
   const widths = new Map<string, number>();
@@ -52,11 +52,10 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
   const root = element('section', undefined, 'mvp-grid');
   root.dataset.theme = settings.theme;
   root.setAttribute('aria-label', options.label);
-  const toolbar = element('div', undefined, 'mvp-grid-toolbar');
   const count = element('span', '', 'mvp-grid-count');
   const columnCount = element('span', '', 'mvp-grid-column-count');
-  const footer = element('div', undefined, 'mvp-grid-footer'); footer.append(count, columnCount);
-  const status = element('span', '', 'mvp-grid-status'); status.setAttribute('role', 'status'); status.hidden = !!options.onNotice;
+  const status = options.statusElement || element('span', '', 'mvp-grid-status'); status.setAttribute('role', 'status');
+  const footer = element('div', undefined, 'mvp-grid-footer'); footer.append(status, count, columnCount);
   const host = element('div', undefined, 'mvp-grid-table'); host.tabIndex = 0;
   // A selected cell needs a real text target before IME/insertText produces a keydown.
   // Keep the sheet in selection mode until committed text starts the visible editor.
@@ -66,7 +65,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
   let rangeAnchor: CellComponent | undefined, rangeCursor: CellComponent | undefined;
   const panel = element('div', undefined, 'mvp-grid-panel'); panel.hidden = true;
   panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-modal', 'true');
-  root.append(toolbar, host, panel, status, typingTarget, footer); container.append(root);
+  root.append(host, panel, typingTarget, footer); container.append(root);
   let table: Tabulator;
   type Edit = { id: number; field: string; before: unknown; after: unknown };
   type ColumnState = { field: string; visible: boolean }[];
@@ -250,12 +249,12 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
   }
   function columnChooser(): void {
     if (!panel.hidden && panel.dataset.kind === 'columns') { closePanel(); return; }
-    const content = openPanel('숨김 열 보기 / 복원');
+    const content = openPanel('속성');
     panel.dataset.kind = 'columns'; columnToggle.setAttribute('aria-expanded', 'true');
     panel.classList.add('mvp-grid-column-panel');
     if (typeof window !== 'undefined') {
-      const box = toolbar.getBoundingClientRect();
-      const top = Math.max(12, Math.min(box.bottom + 4, window.innerHeight - 260));
+      const box = host.getBoundingClientRect();
+      const top = Math.max(12, Math.min(box.top + 28, window.innerHeight - 260));
       panel.style.setProperty('--column-panel-top', top + 'px');
       panel.style.setProperty('--column-panel-right', Math.max(12, window.innerWidth - box.right + 6) + 'px');
     }
@@ -303,6 +302,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
     const fold = iconButton('up', '열 분류 접기', () => { groups.hidden = !groups.hidden; setIcon(fold, groups.hidden ? 'down' : 'up', groups.hidden ? '열 분류 펼치기' : '열 분류 접기'); fold.setAttribute('aria-expanded', String(!groups.hidden)); });
     fold.setAttribute('aria-expanded', 'true');
     groupHeading.append(element('strong', '열 분류'), fold); content.append(search, groupHeading, groups, list);
+    if (!options.readOnly) content.append(button('사용자 열 추가', addColumnDialog));
     draw();
   }
   function renameColumn(column: GridColumn, title = '표시명 설정'): void {
@@ -354,7 +354,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
       { label: '열 숨기기', action: () => changeColumns(() => { visibility.set(column.field, false); table.hideColumn(column.field); }) },
       { label: '선택 열 숨기기', action: () => { const fields = selectedColumns(column.field); changeColumns(() => { for (const field of fields) { visibility.set(field, false); table.hideColumn(field); } }); } },
       { label: '열 이동·숨김 취소', action: () => replay(true) },
-      { label: '숨김 열 보기 / 복원', action: columnChooser },
+      { label: '속성', action: columnChooser },
       { label: '표시명 설정', action: () => renameColumn(column) },
       { label: readOnlyKeys.has(column.key) ? '열 잠금 (읽기 전용)' : lockedColumn(column) ? '열 잠금 해제' : '열 잠금', disabled: !!options.readOnly || readOnlyKeys.has(column.key), action: () => setColumnLock(column, !lockedColumn(column)) },
       { label: '열 타입', menu: (Object.keys(columnTypeLabels) as MvpColumnType[]).map(type => ({ label: columnTypeLabels[type], action: () => setType(column, type) })) },
@@ -373,7 +373,8 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
       hozAlign: ['money', 'number', 'percent'].includes(typeOf(column) || '') ? 'right' : typeOf(column) === 'boolean' ? 'center' : 'left',
       headerContextMenu: menu, editor: options.readOnly ? undefined : editCell,
       // Tabulator 6.5 loadMenuEvent accepts functions; @types 6.3 declares only arrays.
-      contextMenu: (options.onValueDictionary || options.allowRowDelete ? (_event: UIEvent, cell: CellComponent) => [
+      contextMenu: (options.onValueDictionary || options.allowRowDelete || options.onCorrection ? (_event: UIEvent, cell: CellComponent) => [
+        ...(options.correction?.(cell.getRow().getData()._mvpRow, column.key) ? [{ label: '정정값 확인', action: () => options.onCorrection?.(cell.getRow().getData()._mvpRow, column.key) }] : []),
         ...(options.onValueDictionary ? [{ label: '값 사전 추가', action: () => { const chosen = selected(),included = chosen.some(candidate => candidate.getField() === cell.getField() && candidate.getRow().getData()._mvpRow === cell.getRow().getData()._mvpRow); const entries = (included ? chosen.filter(candidate => !model.blankSlot(candidate.getRow().getData() as GridBufferRow)) : [cell]).map(candidate => ({ key: getColumn(candidate.getField())!.key, value: candidate.getValue() })); if (entries.length > 1) options.onValueDictionary?.(column.key, cell.getValue(), entries); else options.onValueDictionary?.(column.key, cell.getValue()); } }] : []),
         ...(options.allowRowDelete ? rowDeleteMenu(cell.getRow()) : []),
       ] : undefined) as unknown as ColumnDefinition['contextMenu'],
@@ -414,6 +415,15 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
         const dictionary = Object.hasOwn(settings.dictionary.values, column.key) ? settings.dictionary.values[column.key] : undefined;
         span.textContent = dictionary && Object.prototype.hasOwnProperty.call(dictionary, String(value)) ? dictionary[String(value)] : value !== null && typeof value === 'object' ? nestedPreview(value, options.itemColumnKeys?.includes(column.key) ? 'items' : column.key) : formatValue(value, typeOf(column), formatOf(column));
         span.title = rawText(value);
+        const correction = options.correction?.(cell.getRow().getData()._mvpRow, column.key);
+        if (correction) {
+          span.classList.add('mvp-grid-corrected');
+          span.title = '사용자 정정값: ' + rawText(correction.value) + '\n최근 수집값: ' + rawText(correction.source) + '\n우클릭 → 정정값 확인';
+          const badge = element('button', '정정', 'mvp-correction-mark'); badge.type = 'button';
+          badge.setAttribute('aria-label', model.label(column, settings) + ' 정정값 확인');
+          badge.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); options.onCorrection?.(cell.getRow().getData()._mvpRow, column.key); });
+          span.prepend(badge);
+        }
         if (value !== null && typeof value === 'object') {
           span.className = 'mvp-grid-nested'; span.setAttribute('role', 'button'); span.tabIndex = 0;
           span.setAttribute('aria-label', model.label(column, settings) + ' 상세 보기');
@@ -442,8 +452,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
       const next: MvpColumnFormat = {};
       if (['number', 'money', 'percent'].includes(type || '')) { if (number !== undefined) next.decimals = number; next.grouping = grouping.checked; }
       if (type === 'date' || type === 'datetime') next.dateFormat = date.value as MvpColumnFormat['dateFormat'];
-      settings.columnFormats = Object.fromEntries([...Object.entries(settings.columnFormats || {}).filter(([key]) => key !== column.key), [column.key, next]]);
-      handle.setSettings(settings); options.onColumnFormat?.(column.key, next); closePanel();
+      handle.setSettings({ ...settings, columnFormats: { ...settings.columnFormats, [column.key]: next } }); options.onColumnFormat?.(column.key, next); closePanel();
     }));
   }
   function openNested(cell: CellComponent, column: GridColumn): void {
@@ -483,15 +492,8 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
       return active.slice(y, y + values.length);
     } catch (error) { report(error); return []; }
   };
-  const combine = element('select'); combine.setAttribute('aria-label', '여러 열 필터 결합');
-  for (const [value, label] of [['and', '모두 충족 (AND)'], ['or', '하나 이상 충족 (OR)']]) { const option = element('option', label); option.value = value; combine.append(option); }
-  combine.value = view.combine;
-  combine.addEventListener('change', () => { view.combine = combine.value as 'and' | 'or'; whenReady(applyFilter); });
-  const resetFilters = button('열 필터 해제', () => { view.filters.clear(); whenReady(applyFilter); });
-  resetFilters.title = '머리글에서 설정한 열 필터만 해제합니다. 전체 검색어는 유지합니다.';
-  const columnToggle = button('숨김 열', () => whenReady(columnChooser)); columnToggle.setAttribute('aria-expanded', 'false');
-  toolbar.append(columnToggle, combine, resetFilters);
-  if (!options.readOnly) toolbar.append(button('+ 사용자 열', () => whenReady(addColumnDialog)));
+  const columnToggle = button('속성', () => whenReady(columnChooser)); columnToggle.className = 'mvp-grid-properties'; columnToggle.setAttribute('aria-expanded', 'false');
+  for (const event of ['click', 'mousedown', 'pointerdown', 'dblclick']) columnToggle.addEventListener(event, e => e.stopPropagation());
   const order = new Map(saved?.columns.map((column, index) => [column.key, index]));
   // Restore the order before construction: repeated moveColumn calls each relayout the whole sheet.
   const orderedColumns = model.columns.slice().sort((a, b) => (order.get(a.key) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.key) ?? Number.MAX_SAFE_INTEGER));
@@ -503,7 +505,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
     clipboard: true, clipboardCopyRowRange: 'range', clipboardCopyStyled: false,
     clipboardCopyConfig: { rowHeaders: false, columnHeaders: false },
     clipboardPasteParser: (text: string) => { try { return parseClipboard(text); } catch (error) { report(error); return false; } }, clipboardPasteAction: pasteRows,
-    rowHeader: { formatter: 'rownum', width: 40, headerSort: false, resizable: false, frozen: true },
+    rowHeader: { formatter: 'rownum', titleFormatter: () => columnToggle, width: 44, headerSort: false, resizable: false, frozen: true },
     rowContextMenu: options.allowRowDelete ? (_event: UIEvent, row: RowComponent) => rowDeleteMenu(row) : undefined,
     columns: orderedColumns.map(column => definition(column, options.rows)), placeholder: '자료가 없습니다. 사용자 열을 추가하여 입력할 수 있습니다.',
   } as any);
@@ -591,12 +593,20 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
   host.addEventListener('click', focusSelection); root.addEventListener('keydown', keydown, true);
   const handle: GridRendererHandle = {
     rows: () => structuredClone(rows()),
+    getSelectedRows: () => {
+      if (!ready) return [];
+      const ids = new Set(selected().map(cell => (cell.getRow().getData() as GridBufferRow)._mvpRow));
+      return buffer('active').filter(row => ids.has(row._mvpRow) && !model.blankSlot(row)).map(row => ({ sourceIndex: row._mvpRow, row: structuredClone(model.decode(row)) }));
+    },
     getViewState: (): GridViewState => ({ search: view.search, combine: view.combine, userColumnsVisible, filters: structuredClone([...view.filters]), columns: ready ? table.getColumns().flatMap(column => { const source = getColumn(column.getField()); return source ? [{ key: source.key, width: column.getWidth(), visible: column.isVisible() }] : []; }) : saved?.columns || [], sorters: ready ? table.getSorters().flatMap(sort => { const column = getColumn(sort.field); return column ? [{ key: column.key, dir: sort.dir }] : []; }) : saved?.sorters || [] }),
     setSearch: search => { view.search = search; whenReady(applyFilter); },
+    clearColumnFilters: () => { view.filters.clear(); whenReady(applyFilter); },
     setRowFilter: predicate => { rowFilter = predicate; whenReady(applyFilter); },
     setSettings: next => {
       const hideChanged = next.hideEmptyColumns !== settings.hideEmptyColumns || next.hideUnmappedColumns !== settings.hideUnmappedColumns;
+      const columnsChanged = (['hideEmptyColumns', 'hideUnmappedColumns', 'dictionary', 'columnTypes', 'columnFormats', 'columnLocks'] as const).some(key => JSON.stringify(next[key]) !== JSON.stringify(settings[key]));
       settings = structuredClone(next); root.dataset.theme = settings.theme;
+      if (!columnsChanged) return;
       whenReady(() => {
         for (const column of table.getColumns()) if (getColumn(column.getField())) widths.set(column.getField(), column.getWidth());
         if (hideChanged) visibility.clear();
