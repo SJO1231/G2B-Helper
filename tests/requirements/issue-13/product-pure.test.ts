@@ -77,4 +77,20 @@ describe('#13 L-B P4 GridModel 원값 왕복 보존(A4·M04)', () => {
     expect(judgePreservation(expected, model.rows(buffer))).toMatchObject({ verdict: MET });
     expect(judgePreservation(sourceBefore, source)).toMatchObject({ verdict: MET });
   });
+
+  it('작업 버퍼의 중첩 품목 값을 바꾸면 되돌린 행에서는 그 값만 바뀌고 원천 행의 중첩 값은 고정 증인 그대로다', () => {
+    const source = preservationRows();
+    const model = new GridModel(source);
+    const buffer = model.encode(source);
+    const column = model.columns.find((candidate) => candidate.key === 'items');
+    expect(column).toBeDefined();
+    // 작업 버퍼의 중첩 배열을 그 자리에서 바꾼다. encode가 원천을 얕게만 복제하면 이 변경이 원천 items에 새어 들어간다.
+    const workingItems = buffer[0][column!.field] as { qty: unknown }[];
+    workingItems[0].qty = '9';
+    // 원천 기대값은 실행 전 스냅숏이 아니라 고정 증인(preservationRows)에서 만든다: items[0].qty는 '0'이어야 한다.
+    expect(judgePreservation(preservationRows(), source)).toMatchObject({ verdict: MET });
+    const expected = preservationRows();
+    (expected[0].items as { qty: unknown }[])[0].qty = '9';
+    expect(judgePreservation(expected, model.rows(buffer))).toMatchObject({ verdict: MET });
+  });
 });
