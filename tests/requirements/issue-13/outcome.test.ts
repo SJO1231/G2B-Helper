@@ -1,9 +1,20 @@
 // #13 F6 결과 분류 자체 검사(구현자 작성). README §5(v3.1.3)의 분기마다 고정 기대 분류와 직접 대조한다.
 // 결함 주입 결과 분류기의 확인이며 제품 충족이나 #13 요구 충족 집계가 아니다.
 import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { DETECTED, MISSED, NOT_APPLICABLE, UNDECIDABLE, classifyMutation, type MutationRun } from './lib/outcome';
 
-const applied = { markerFound: true, beforeSha256: 'a'.repeat(64), afterSha256: 'b'.repeat(64) };
+// 실제 표식 블록 교체의 전후 문자열·전체 사본 hash. 제품·시안 파일은 읽거나 쓰지 않는다.
+const beforeBlock = 'return rows;';
+const afterBlock = 'return [];';
+const before = `/* mutation:start */${beforeBlock}/* mutation:end */`;
+const after = before.replace(beforeBlock, afterBlock);
+const applied = {
+  markerFound: true,
+  beforeSha256: createHash('sha256').update(before).digest('hex'),
+  afterSha256: createHash('sha256').update(after).digest('hex'),
+  blockDiff: { marker: 'mutation', before: beforeBlock, after: afterBlock },
+};
 const injected = [{ element: 'row:e3', value: 'extra' }];
 
 function judgmentRun(overrides: Partial<MutationRun> = {}, mutated: Partial<MutationRun['mutated']> = {}): MutationRun {
@@ -87,7 +98,7 @@ describe('#13 F6 결과 분류 자체 검사', () => {
 
   for (const item of cases) {
     it(`${item.name} → ${item.outcome}`, () => {
-      expect(classifyMutation(item.run)).toEqual({ outcome: item.outcome, reason: item.reason });
+      expect(classifyMutation(item.run)).toEqual({ outcome: item.outcome, reason: item.reason, outputComplete: item.run.mutated.outputComplete });
     });
   }
 
@@ -99,5 +110,108 @@ describe('#13 F6 결과 분류 자체 검사', () => {
     const two = [{ element: 'row:e1', value: 'missing' }, { element: 'row:e2', value: 'missing' }];
     expect(classifyMutation(judgmentRun({ injectedCauses: two }, { causes: [two[0]] })).outcome).toBe(MISSED);
     expect(classifyMutation(judgmentRun({ injectedCauses: two }, { causes: [...two, { element: 'row:e3', value: 'missing' }] })).outcome).toBe(DETECTED);
+  });
+});
+
+describe('#13 F6 독립 검토 반례 (comment 5999326160)', () => {
+  it.each(['\n', '\r', '\r\n', '\u2028', '\u2029'])('판정 끝 줄 구분 문자 %j는 정확한 상태에 포함되지 않는다', (suffix) => {
+    const verdict = `충족${suffix}`;
+    expect(classifyMutation(judgmentRun({ expectedBaseline: verdict, baseline: { verdict, witness: true } })).outcome).toBe(UNDECIDABLE);
+    expect(classifyMutation(judgmentRun({}, { verdict: `미충족${suffix}` })).outcome).toBe(UNDECIDABLE);
+  });
+
+  const invalidNormal = [undefined, '', '미충족', '충족오타', '조건부오타', '충족()', '충족(사유)오타'];
+  for (const verdict of invalidNormal) {
+    it(`기대·정상 판정 ${String(verdict)}는 같은 값이어도 기준 실행이 아니다`, () => {
+      expect(classifyMutation(judgmentRun({ expectedBaseline: verdict, baseline: { verdict, witness: true } })).outcome).toBe(UNDECIDABLE);
+    });
+  }
+
+  for (const verdict of ['미충족오타', '충족오타', '조건부오타', '미확정오타', '미검증오타', '미충족()', '미충족(부재)오타']) {
+    it(`주입 판정 ${verdict}는 알 수 없는 값이다`, () => {
+      expect(classifyMutation(judgmentRun({}, { verdict })).outcome).toBe(UNDECIDABLE);
+    });
+  }
+
+  it('보고 기대·정상 목록 누락은 명시적 빈 배열이 아니다', () => {
+    expect(classifyMutation(reportRun({ expectedReport: undefined, baseline: { witness: true } })).outcome).toBe(UNDECIDABLE);
+    expect(classifyMutation(reportRun({ expectedReport: undefined })).outcome).toBe(UNDECIDABLE);
+    expect(classifyMutation(reportRun({ baseline: { witness: true } })).outcome).toBe(UNDECIDABLE);
+    expect(classifyMutation(reportRun()).outcome).toBe(DETECTED);
+  });
+
+  it('주입 보고 미출력은 출력된 빈 목록과 구별한다', () => {
+    expect(classifyMutation(reportRun({}, { report: undefined })).outcome).toBe(UNDECIDABLE);
+    expect(classifyMutation(reportRun({}, { report: [] })).outcome).toBe(MISSED);
+  });
+
+  it('보고 다중집합은 NUL 구분자 충돌로 같아지지 않는다', () => {
+    expect(classifyMutation(reportRun({ expectedReport: ['a', 'b\u0000c'], baseline: { report: ['a\u0000b', 'c'], witness: true } })).outcome).toBe(UNDECIDABLE);
+  });
+
+  for (const hash of ['', 'x', 'g'.repeat(64), 'a'.repeat(63), 'a'.repeat(65)]) {
+    it(`유효 SHA256이 아닌 길이 ${hash.length}의 값은 주입 증거가 아니다`, () => {
+      expect(classifyMutation(judgmentRun({ injection: { ...applied, beforeSha256: hash } })).outcome).toBe(UNDECIDABLE);
+      expect(classifyMutation(judgmentRun({ injection: { ...applied, afterSha256: hash } })).outcome).toBe(UNDECIDABLE);
+    });
+  }
+
+  for (const targets of [NaN, Infinity, -1, 0.5]) {
+    it(`관측 대상 수 ${String(targets)}는 양의 정수가 아니다`, () => {
+      expect(classifyMutation(judgmentRun({}, { targets })).outcome).toBe(UNDECIDABLE);
+    });
+  }
+
+  it('bool·hash만 있고 실제 표식 블록 diff가 없으면 판정 불가다', () => {
+    const { blockDiff: _diff, ...withoutDiff } = applied;
+    expect(classifyMutation(judgmentRun({ injection: withoutDiff })).outcome).toBe(UNDECIDABLE);
+  });
+
+  it('표식 이름 누락·같은 전후 블록은 주입 diff가 아니다', () => {
+    for (const blockDiff of [{ marker: '', before: beforeBlock, after: afterBlock }, { marker: 'mutation', before: beforeBlock, after: beforeBlock }]) {
+      const injection = { ...applied, blockDiff };
+      expect(classifyMutation(judgmentRun({ injection })).outcome).toBe(UNDECIDABLE);
+    }
+  });
+
+  it('불완전 출력에서 모든 원인 검출은 성공이며 불완전 flag를 보존한다', () => {
+    expect(classifyMutation(judgmentRun({}, { outputComplete: false }))).toMatchObject({ outcome: DETECTED, outputComplete: false });
+    expect(classifyMutation(reportRun({}, { outputComplete: false }))).toMatchObject({ outcome: DETECTED, outputComplete: false });
+  });
+
+  it('필수 버튼 부재는 읽은 영역 1개·버튼 0개이며 영역 관측 불가와 다르다', () => {
+    const causes = [{ element: 'remote:조회', value: 'absent' }];
+    expect(classifyMutation(judgmentRun({ id: 'M-R4-1', designated: 'R4-a', injectedCauses: causes }, { targets: 1, verdict: '미충족(부재)', causes })).outcome).toBe(DETECTED);
+    expect(classifyMutation(judgmentRun({ id: 'M-R4-1', designated: 'R4-a', injectedCauses: causes }, { observed: false, targets: 0, verdict: '미충족(부재)', causes })).outcome).toBe(UNDECIDABLE);
+  });
+
+  const emptySearchCause = [{ element: 'search-result:B', value: '[]' }];
+  const emptySearch = { observed: true, targets: 1, verdict: '미검증(증인 불성립)', causes: emptySearchCause, searchRows: [] as string[], outputComplete: true };
+  const searchRun = judgmentRun({ id: 'M-R2-7', designated: 'R2-0', injectedCauses: emptySearchCause, mutated: emptySearch });
+
+  it('M-R2-7은 정상 검색 전제와 관측 공집합의 같은 원인이 확인되면 검출한다', () => {
+    expect(classifyMutation(searchRun).outcome).toBe(DETECTED);
+  });
+
+  it('M-R2-7 예외도 모든 주입 원인이 출력됐으면 불완전 flag를 남긴다', () => {
+    expect(classifyMutation({ ...searchRun, mutated: { ...emptySearch, outputComplete: false } })).toMatchObject({ outcome: DETECTED, outputComplete: false });
+  });
+
+  it('공집합 예외는 다른 지정·정상 실패·관측 실패·비공집합·미확정·원인 불일치에 퍼지지 않는다', () => {
+    const counterexamples = [
+      { ...searchRun, id: 'M-OTHER' },
+      { ...searchRun, designated: 'R2-b' },
+      { ...searchRun, baseline: { verdict: '미충족', witness: true } },
+      { ...searchRun, baseline: { verdict: '충족', witness: false } },
+      { ...searchRun, mutated: { ...emptySearch, observed: false } },
+      { ...searchRun, mutated: { ...emptySearch, targets: 0 } },
+      { ...searchRun, mutated: { ...emptySearch, searchRows: undefined } },
+      { ...searchRun, mutated: { ...emptySearch, searchRows: ['e1'] } },
+      { ...searchRun, mutated: { ...emptySearch, verdict: '미확정(관측만)' } },
+      { ...searchRun, mutated: { ...emptySearch, verdict: '미검증(관측 불가)' } },
+      { ...searchRun, mutated: { ...emptySearch, causes: [{ element: 'search-result:B', value: '[e1]' }] } },
+      { ...searchRun, injectedCauses: [] },
+    ];
+    for (const run of counterexamples) expect(classifyMutation(run).outcome).toBe(UNDECIDABLE);
   });
 });
