@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>#13 정상 합성 fixture</title>
+<style>
+body { font: 14px sans-serif; margin: 8px; }
+[hidden] { display: none !important; }
+table { border-collapse: collapse; margin-top: 6px; }
+th, td { border: 1px solid #999; padding: 2px 6px; }
+.panel { border: 1px solid #333; padding: 6px; margin: 6px 0; background: #fff; }
+</style>
+</head>
+<body>
+<!--
+  #13 정상 합성 fixture(tests/requirements/issue-13/README.md §5).
+  기준표 요구대로 동작하도록 직접 작성했으며 F44 코드를 복사하지 않았다. 자료는 검사가 주입하는 합성 자료뿐이다.
+  /*M:이름*/ … /*/M:이름*/ 표식 블록은 결함 주입 사본에서만 바뀐다. 검사 전용 통과 도우미는 없다.
+-->
+<nav id="tabs" role="tablist" aria-label="표"></nav>
+<div id="toolbar"><input id="search" aria-label="검색"> <button id="clearFilters" type="button"></button></div>
+<table id="grid"><thead id="gridHead"></thead><tbody id="gridBody"></tbody></table>
+<div id="formatPanel" class="panel" role="dialog" aria-label="열 서식" hidden>
+  <label>소수 자릿수 <select id="decimals" aria-label="소수 자릿수"></select></label>
+  <button id="applyFormat" type="button">적용</button>
+</div>
+<div id="filterPanel" class="panel" role="dialog" aria-label="열 필터" hidden>
+  <div id="valueBox"><input id="valueSearch" aria-label="값 목록 검색"><div id="valueList" role="group" aria-label="값 목록"></div></div>
+  <label>포함 <input id="includeTerm" aria-label="포함 검색"></label>
+  <label>제외 <input id="excludeTerm" aria-label="제외 검색"></label>
+  <button id="applyFilter" type="button">적용</button>
+</div>
+<script>
+'use strict';
+const DATA = /*__DATA__*/null;
+const $ = (id) => document.getElementById(id);
+/*M:load*/const source = structuredClone(DATA.tables);/*/M:load*/
+/*M:working*/const working = structuredClone(source);/*/M:working*/
+window.__issue13 = { source, working };
+const views = Object.fromEntries(Object.keys(DATA.columns).map((name) => [name, { search: '', filters: {}, formats: {} }]));
+let current = DATA.initialTable;
+let activeColumn = null;
+let formatColumn = null;
+const view = () => views[current];
+const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+const kind = (value) => (value === null ? 'null' : value === undefined ? 'missing' : typeof value);
+const tokenOf = (value) => JSON.stringify([kind(value), value]);
+const textOf = (value) => (value === null || value === undefined ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value));
+const rowId = (row, index) => (own(row, 'id') ? String(row.id) : '#' + index);
+const PLAIN = /^([+-]?)(\d+)(?:\.(\d+))?$/;
+const group = (text) => text.replace(/^(-?)(\d+)/, (whole, sign, digits) => sign + digits.replace(/\B(?=(\d{3})+(?!\d))/g, ','));
+
+function numberDisplay(text, digits) {
+  if (!PLAIN.test(text)) return text;
+  /*M:formatNumber*/
+  if (digits === 'keep') return text;
+  const match = PLAIN.exec(text);
+  const fraction = match[3] || '';
+  let units = BigInt(match[2] + fraction);
+  let scale = fraction.length;
+  if (digits >= scale) {
+    units *= 10n ** BigInt(digits - scale);
+  } else {
+    const divisor = 10n ** BigInt(scale - digits);
+    const rest = units % divisor;
+    units /= divisor;
+    if (rest * 2n >= divisor) units += 1n;
+  }
+  scale = digits;
+  let out = units.toString();
+  if (scale > 0) {
+    out = out.padStart(scale + 1, '0');
+    out = out.slice(0, -scale) + '.' + out.slice(-scale);
+  }
+  return (match[1] === '-' && units !== 0n ? '-' : '') + out;
+  /*/M:formatNumber*/
+}
+
+function display(value, column) {
+  const text = textOf(value);
+  if (column.type !== 'money' && column.type !== 'number') return text;
+  const digits = own(view().formats, column.key) ? view().formats[column.key] : 'keep';
+  const shown = numberDisplay(text, digits);
+  return column.type === 'money' ? group(shown) : shown;
+}
+
+function matchValue(cellValue, token) {
+  /*M:matchValue*/return tokenOf(cellValue) === token;/*/M:matchValue*/
+}
+
+function matchesFilter(row, key, rule) {
+  const text = textOf(row[key]);
+  if (rule.values.length && !rule.values.some((token) => matchValue(row[key], token))) return false;
+  if (rule.include && !text.includes(rule.include)) return false;
+  if (rule.exclude && text.includes(rule.exclude)) return false;
+  return true;
+}
+
+function matchesSearch(row, term) {
+  /*M:search*/return !term || Object.values(row).some((value) => textOf(value).includes(term));/*/M:search*/
+}
+
+function visibleRows() {
+  const v = view();
+  let rows = working[current]
+    .map((row, index) => ({ row, id: rowId(row, index) }))
+    .filter(({ row }) => matchesSearch(row, v.search) && Object.entries(v.filters).every(([key, rule]) => matchesFilter(row, key, rule)));
+  /*M:visible*/return rows;/*/M:visible*/
+}
+
+function render() {
+  const columns = DATA.columns[current];
+  $('tabs').replaceChildren(...Object.keys(DATA.columns).map((name) => {
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-selected', String(name === current));
+    tab.dataset.table = name;
+    tab.textContent = DATA.tabLabels[name];
+    return tab;
+  }));
+  const headRow = document.createElement('tr');
+  for (const column of columns) {
+    const th = document.createElement('th');
+    th.dataset.key = column.key;
+    const label = document.createElement('span');
+    label.textContent = column.label;
+    th.append(label);
+    const filter = document.createElement('button');
+    filter.type = 'button';
+    filter.dataset.filter = column.key;
+    filter.setAttribute('aria-label', column.label + ' 열 필터');
+    filter.textContent = '▽';
+    th.append(filter);
+    if (column.type === 'money' || column.type === 'number') {
+      /*M:formatButton*/const format = document.createElement('button');
+      format.type = 'button';
+      format.dataset.format = column.key;
+      format.setAttribute('aria-label', column.label + ' 열 서식');
+      format.textContent = '서식';
+      th.append(format);/*/M:formatButton*/
+    }
+    headRow.append(th);
+  }
+  $('gridHead').replaceChildren(headRow);
+  $('gridBody').replaceChildren(...visibleRows().map(({ row, id }) => {
+    const tr = document.createElement('tr');
+    tr.dataset.row = id;
+    for (const column of columns) {
+      const td = document.createElement('td');
+      td.dataset.key = column.key;
+      td.textContent = display(row[column.key], column);
+      tr.append(td);
+    }
+    return tr;
+  }));
+  $('search').value = view().search;
+}
+
+function hidePanels() {
+  $('filterPanel').hidden = true;
+  $('formatPanel').hidden = true;
+}
+
+function openFormat(key) {
+  hidePanels();
+  formatColumn = key;
+  const select = $('decimals');
+  select.replaceChildren(...['keep', ...Array.from({ length: 21 }, (unused, n) => String(n))].map((value) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = value === 'keep' ? '원본 유지' : value;
+    return option;
+  }));
+  const chosen = view().formats[key];
+  select.value = chosen === undefined || chosen === 'keep' ? 'keep' : String(chosen);
+  $('formatPanel').hidden = false;
+}
+
+function openFilter(key) {
+  hidePanels();
+  activeColumn = key;
+  const rule = view().filters[key] || { values: [], include: '', exclude: '' };
+  /*M:valueList*/
+  const seen = new Set();
+  const list = $('valueList');
+  list.replaceChildren();
+  for (const row of working[current]) {
+    const token = tokenOf(row[key]);
+    if (seen.has(token)) continue;
+    seen.add(token);
+    const label = document.createElement('label');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.dataset.token = token;
+    box.checked = rule.values.includes(token);
+    label.append(box, ' ' + textOf(row[key]));
+    list.append(label);
+  }
+  /*/M:valueList*/
+  if ($('valueSearch')) $('valueSearch').value = '';
+  $('includeTerm').value = rule.include;
+  $('excludeTerm').value = rule.exclude;
+  $('filterPanel').hidden = false;
+}
+
+$('tabs').addEventListener('click', (event) => {
+  const tab = event.target.closest('[data-table]');
+  if (!tab) return;
+  current = tab.dataset.table;
+  hidePanels();
+  /*M:tabHook*//*/M:tabHook*/
+  render();
+});
+
+$('search').addEventListener('input', () => {
+  view().search = $('search').value;
+  /*M:searchHook*//*/M:searchHook*/
+  render();
+});
+
+/*M:clearLabel*/$('clearFilters').textContent = '필터 해제';/*/M:clearLabel*/
+$('clearFilters').addEventListener('click', () => {
+  /*M:clear*/view().filters = {};/*/M:clear*/
+  hidePanels();
+  render();
+});
+
+$('gridHead').addEventListener('click', (event) => {
+  const filter = event.target.closest('[data-filter]');
+  if (filter) {
+    openFilter(filter.dataset.filter);
+    return;
+  }
+  const format = event.target.closest('[data-format]');
+  if (format) openFormat(format.dataset.format);
+});
+
+$('applyFormat').addEventListener('click', () => {
+  const value = $('decimals').value;
+  /*M:applyFormat*/view().formats[formatColumn] = value === 'keep' ? 'keep' : Number(value);/*/M:applyFormat*/
+  hidePanels();
+  render();
+});
+
+$('valueSearch').addEventListener('input', () => {
+  const term = $('valueSearch').value;
+  for (const label of $('valueList').querySelectorAll('label')) label.hidden = Boolean(term) && !label.textContent.includes(term);
+});
+
+$('applyFilter').addEventListener('click', () => {
+  const list = $('valueList');
+  const values = list ? [...list.querySelectorAll('input[type=checkbox]')].filter((box) => box.checked).map((box) => box.dataset.token) : [];
+  const rule = { values, include: $('includeTerm').value, exclude: $('excludeTerm').value };
+  /*M:applyFilter*/
+  if (!rule.values.length && !rule.include && !rule.exclude) delete view().filters[activeColumn];
+  else view().filters[activeColumn] = rule;
+  /*/M:applyFilter*/
+  hidePanels();
+  render();
+});
+
+render();
+</script>
+</body>
+</html>
