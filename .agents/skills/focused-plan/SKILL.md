@@ -48,4 +48,4 @@ description: 여러 모듈·단계·불확실성이 얽힌 구현이나 리팩�
 
 ## G2B Helper 연결
 
-이 프로젝트에서는 docs/MVP.md를 요구 정본, docs/process/P00.md의 harness-json을 승인 범위·명령 정본으로 쓴다. 기존 P00에 단계와 검증을 연결한다. 제품 브라우저 자동화·자동수집은 이번 MVP에서 보류이며 Playwright 개발 검증은 허용한다.
+이 프로젝트에서는 docs/MVP.md를 요구 정본, GitHub 이슈를 승인 범위로 쓴다. 이슈에 단계와 검증을 연결한다. 제품 브라우저 자동화·자동수집은 이번 MVP에서 보류이며 Playwright 개발 검증은 허용한다.

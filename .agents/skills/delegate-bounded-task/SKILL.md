@@ -56,4 +56,4 @@ description: 이미 허용된 다중 Agent 작업에서 독립 과업을 나누�
 
 ## G2B Helper 연결
 
-현재 승인된 task를 .codex/agents 또는 .claude/agents의 역할과 명시 model/effort에 대응시킨다. 추천과 실제 실행 설정을 분리한다. fresh context에는 필요한 명세·scope·검증·중단 조건만 준다. 하위 Agent는 재귀 위임하지 않으며 Astra는 자동 호출하지 않는다. task/role별 harness state와 소유 파일을 분리하고 같은 파일을 동시에 고치지 않는다.
+현재 승인된 task를 .codex/agents 또는 .claude/agents의 역할과 명시 model/effort에 대응시킨다. 추천과 실제 실행 설정을 분리한다. fresh context에는 필요한 명세·scope·검증·중단 조건만 준다. 하위 Agent는 재귀 위임하지 않으며 Astra는 자동 호출하지 않는다. task/role별 소유 파일을 분리하고 같은 파일을 동시에 고치지 않는다.
