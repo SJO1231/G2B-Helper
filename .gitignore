@@ -10,5 +10,6 @@ __pycache__/
 artifacts/
 .codex/harness-state/
 참고자료/
+prototypes/
 native/vendor/
 *.spec
