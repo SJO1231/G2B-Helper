@@ -53,11 +53,13 @@ export function loadPolicy(root, policyFile = 'docs/process/P00.md') {
   if (blocks.length !== 1) fail('Exactly one harness-json block required');
   const policy = JSON.parse(blocks[0][1]);
   if (policy.version !== 1 || !policy.bootstrapAuthorization?.sourceRef || !policy.bootstrapAuthorization?.statement || !policy.bootstrapAuthorization?.date) fail('Approved bootstrap authorization missing');
+  if (policy.changeControlRequired !== undefined && typeof policy.changeControlRequired !== 'boolean') fail('Invalid change-control switch');
   for (const key of ['approvedTasks', 'commands', 'protected', 'frozen']) if (!Array.isArray(policy[key])) fail('Invalid policy: ' + key);
   if (!policy.roles || !policy.approvedTasks.length) fail('Roles/tasks required');
   const ids = policy.commands.map(c => c.id);
   if (new Set(ids).size !== ids.length) fail('Duplicate command id');
   for (const task of policy.approvedTasks) {
+    if (task.changeContract) changeContract(root, policy, task);
     if (task.dispatchModel !== undefined && (typeof task.dispatchModel !== 'string' || !task.dispatchModel || !task.authorizationRef)) fail('Explicit dispatch authorization missing');
     if (task.verificationInputs !== undefined) {
       if (!Array.isArray(task.verificationInputs) || !task.verificationInputs.every(p => typeof p === 'string')) fail('Invalid verification inputs');
@@ -81,8 +83,33 @@ export function bounds(policy, taskId, roleId) {
   if (/astra/i.test(role.model)) fail('Astra requires explicit human dispatch; no automatic role');
   return { task, role };
 }
+const present = value => typeof value === 'string' && value.trim().length > 0;
+const approvedOrigin = requirement => ['user-request', 'user-confirmed'].includes(requirement.origin);
+export function changeContract(root, policy, task) {
+  if (task.mode === 'read-only') return null;
+  const contract = task.changeContract;
+  if (!contract && !policy.changeControlRequired) return null;
+  if (!contract || !present(contract.sourceRef) || !Array.isArray(contract.baselineRefs) || !contract.baselineRefs.length || typeof contract.requireIndependentReview !== 'boolean') fail('Change contract missing/invalid: ' + task.id);
+  for (const ref of contract.baselineRefs) resolveSafe(root, ref);
+  if (!Array.isArray(contract.requirements) || !contract.requirements.length) fail('Requirement mapping missing: ' + task.id);
+  const ids = new Set();
+  for (const item of contract.requirements) {
+    if (!present(item.id) || ids.has(item.id) || !present(item.sourceRef) || !present(item.expectation) || !['user-request', 'user-confirmed', 'proposal', 'unresolved'].includes(item.origin) || !['preserve', 'add', 'change', 'remove', 'merge'].includes(item.action) || !Array.isArray(item.paths) || !item.paths.length) fail('Invalid requirement mapping: ' + task.id);
+    ids.add(item.id);
+    for (const file of item.paths) resolveSafe(root, file.endsWith('/**') ? file.slice(0, -3) : file);
+    if (['change', 'remove', 'merge'].includes(item.action) && approvedOrigin(item) && !present(item.approvalRef)) fail('Explicit change approval missing: ' + item.id);
+  }
+  return contract;
+}
+function requirementPath(contract, relative, removed = false) {
+  if (!contract) return;
+  const related = contract.requirements.filter(item => item.paths.some(p => matches(relative, p)));
+  if (related.some(item => item.action === 'preserve')) fail('Requirement-preserved path: ' + relative);
+  if (!related.some(item => approvedOrigin(item) && (removed ? ['remove', 'merge'].includes(item.action) && present(item.approvalRef) : item.action !== 'preserve'))) fail((removed ? 'Deletion approval missing: ' : 'No approved requirement for path: ') + relative);
+}
 export function checkPaths(root, policy, taskId, roleId, files, { commandOutput = false } = {}) {
   const { task, role } = bounds(policy, taskId, roleId);
+  const contract = changeContract(root, policy, task);
   if (!files.length) fail('No mutation paths identified');
   if (!commandOutput && (role.readOnly || task.mode === 'read-only')) fail('Read-only role/task');
   for (const file of files) {
@@ -90,11 +117,14 @@ export function checkPaths(root, policy, taskId, roleId, files, { commandOutput 
     if (policy.protected.some(p => matches(relative, p)) || policy.frozen.some(p => isFrozen(relative, p))) fail('Protected/frozen mutation: ' + relative);
     if (!task.scope?.some(p => matches(relative, p))) fail('Outside approved task: ' + relative);
     if (!commandOutput && role.scope && !role.scope.some(p => matches(relative, p))) fail('Outside role scope: ' + relative);
+    if (!commandOutput) requirementPath(contract, relative);
+    else if (contract?.requirements.some(item => item.action === 'preserve' && item.paths.some(p => matches(relative, p)))) fail('Requirement-preserved output: ' + relative);
   }
   return true;
 }
 export function checkCommand(root, policy, taskId, roleId, id) {
   const { task } = bounds(policy, taskId, roleId);
+  changeContract(root, policy, task);
   const command = policy.commands.find(c => c.id === id);
   if (!command || !task.commands?.includes(id)) fail('Unregistered command for task: ' + id);
   if (command.outputs.length) checkPaths(root, policy, taskId, roleId, command.outputs.map(p => p.endsWith('/**') ? p.slice(0, -3) : p), { commandOutput: true });
@@ -104,7 +134,7 @@ const excludes = ['.git/**', 'node_modules/**', '.venv/**', '.codex/harness-stat
 export function snapshot(root) { return fileTree(root, excludes); }
 export function taskSnapshot(root, policy, taskId) {
   const task = policy.approvedTasks.find(t => t.id === taskId);
-  const inputs = task.verificationInputs ?? [];
+  const inputs = [...(task.verificationInputs ?? []), ...(task.changeContract?.baselineRefs ?? []), ...(task.changeContract?.requirements.flatMap(item => item.paths) ?? [])];
   const patterns = [...task.scope, ...policy.protected, ...inputs];
   const outputs = policy.commands.filter(c => task.commands.includes(c.id)).flatMap(c => c.outputs);
   return Object.fromEntries(Object.entries(snapshot(root)).filter(([p]) => (patterns.some(pattern => matches(p, pattern)) || policy.frozen.some(f => isFrozen(p, f))) && (!outputs.some(pattern => matches(p, pattern)) || inputs.some(pattern => matches(p, pattern)))));
@@ -115,10 +145,17 @@ export function audit(root, loaded, state) {
   for (const frozen of loaded.policy.frozen) if (!frozen.sha256 || treeHash(root, frozen.path) !== frozen.sha256) fail('Frozen hash changed: ' + frozen.path);
   const changes = diff(state.baseline, snapshot(root));
   const { task, role } = bounds(loaded.policy, state.task, state.role);
+  const contract = changeContract(root, loaded.policy, task);
+  const allowedOutputs = loaded.policy.commands.filter(c => task.commands.includes(c.id)).flatMap(c => c.outputs);
   const localChanges = [];
   for (const file of changes) {
     if (loaded.policy.protected.some(p => matches(file, p)) || loaded.policy.frozen.some(p => isFrozen(file, p))) fail('Protected/frozen changed: ' + file);
-    if (task.scope.some(p => matches(file, p))) { localChanges.push(file); continue; }
+    if (task.scope.some(p => matches(file, p))) {
+      const removed = !fs.existsSync(resolveSafe(root, file).absolute);
+      const requiredSource = contract?.requirements.some(item => item.paths.some(p => matches(file, p)));
+      if (contract && (removed || requiredSource || !allowedOutputs.some(p => matches(file, p)))) requirementPath(contract, file, removed);
+      localChanges.push(file); continue;
+    }
     const otherTask = loaded.policy.approvedTasks.find(t => t.id !== task.id && t.status === 'approved' && t.scope.some(p => matches(file, p)) && Object.keys(loaded.policy.roles).some(r => {
       const statePath = path.join(root, '.codex/harness-state', t.id + '-' + r + '.json');
       if (!fs.existsSync(statePath)) return false;
@@ -137,6 +174,22 @@ export function parsePatch(patch) {
   if (typeof patch !== 'string' || !patch.startsWith('*** Begin Patch') || !patch.includes('*** End Patch')) fail('Unknown patch format');
   const paths = [...patch.matchAll(/^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/gm)].map(m => m[1].trim());
   if (!paths.length) fail('Patch has no paths'); return paths;
+}
+export function checkRemovedPaths(root, policy, taskId, files) {
+  const task = policy.approvedTasks.find(item => item.id === taskId);
+  const contract = changeContract(root, policy, task);
+  for (const file of files) requirementPath(contract, resolveSafe(root, file).relative, true);
+}
+export function patchRemovedPaths(patch) {
+  parsePatch(patch);
+  const removed = []; let updated;
+  for (const line of patch.split('\n')) {
+    if (line.startsWith('*** Update File: ')) updated = line.slice(17).trim();
+    else if (line.startsWith('*** Delete File: ')) removed.push(line.slice(17).trim());
+    else if (line.startsWith('*** Move to: ') && updated) { removed.push(updated); updated = undefined; }
+    else if (line.startsWith('*** Add File: ')) updated = undefined;
+  }
+  return removed;
 }
 export function evidence(output, contract = { kind: 'exit' }) {
   output = output.replace(/\x1b\[[0-9;]*m/g, '');

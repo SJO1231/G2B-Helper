@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { digest, matches, resolveSafe, loadPolicy, checkPaths, checkCommand, parsePatch, evidence, snapshot, audit, treeHash } from '../../scripts/harness/core.mjs';
-import { start, readState, run, verify } from '../../scripts/harness/cli.mjs';
+import { digest, matches, resolveSafe, loadPolicy, checkPaths, checkCommand, parsePatch, evidence, snapshot, audit, treeHash, checkRemovedPaths, patchRemovedPaths } from '../../scripts/harness/core.mjs';
+import { start, readState, run, verify, review } from '../../scripts/harness/cli.mjs';
 import { normalize, shellCommand, handle, denial } from '../../scripts/harness/hook.mjs';
 
 function fixture(t) {
@@ -87,7 +87,8 @@ test('literal shell wrapper only: denies separators, quoting, traversal and wron
 test('unknown tools denied; adapters recognize structured edit and patch', () => {
   assert.throws(() => normalize({ hook_event_name: 'PreToolUse', tool_name: 'mcp__unknown__write', tool_input: {} }));
   assert.deepEqual(normalize({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: 'src/a' } }).paths, ['src/a']);
-  assert.deepEqual(normalize({ hook_event_name: 'PreToolUse', tool_name: 'apply_patch', tool_input: { command: '*** Begin Patch\n*** Add File: src/a\n+x\n*** End Patch' } }).paths, ['src/a']);
+  const patchEvent = normalize({ hook_event_name: 'PreToolUse', tool_name: 'apply_patch', tool_input: { command: '*** Begin Patch\n*** Add File: src/a\n+x\n*** End Patch' } });
+  assert.deepEqual(patchEvent.paths, ['src/a']); assert.deepEqual(patchEvent.removedPaths, []);
 });
 test('zero tests, failure, missing summary and cancelled tests are not passes', () => {
   for (const output of ['# tests 0\n# fail 0', '', '# tests 3\n# fail 1', '# tests 3\n# fail 0\n# cancelled 1']) assert.throws(() => evidence(output, { kind: 'node-test', minTests: 1 }));
@@ -169,4 +170,153 @@ test('explicit human Astra dispatch accepts its actual model without changing au
 test('directory frozen pre-edit guard blocks descendants even without protected glob', t => {
   const f = fixture(t); f.policy.protected = []; f.policy.approvedTasks[0].scope.push('prototypes/**');
   assert.throws(() => checkPaths(f.root, f.policy, 'H01', 'implementer', ['prototypes/grid/new.txt']), /frozen/);
+});
+
+function controlledFixture(t, independent = true) {
+  const f = fixture(t);
+  f.policy.changeControlRequired = true;
+  f.policy.roles.coordinator = { model: 'gpt-6.1-sol', effort: 'high' };
+  f.policy.approvedTasks[0].changeContract = {
+    sourceRef: 'user-current-request', baselineRefs: ['src/기존 파일.txt'], requireIndependentReview: independent,
+    requirements: [
+      { id: 'R1', origin: 'user-request', sourceRef: 'user-current-request', expectation: 'approved source edit', action: 'change', approvalRef: 'user-current-request', paths: ['src/**', 'tests/**'] },
+      { id: 'R2', origin: 'user-confirmed', sourceRef: 'user-preservation-request', expectation: 'keep original bytes', action: 'preserve', paths: ['src/기존 파일.txt'] }
+    ]
+  };
+  f.save(); return f;
+}
+
+test('required contract blocks historical approvals at start/guard/run instead of treating them as current consent', t => {
+  const f = fixture(t); f.policy.changeControlRequired = true; f.save();
+  assert.throws(() => start(f.root, f.loaded(), 'H01', 'implementer'), /contract/);
+  assert.throws(() => checkPaths(f.root, f.policy, 'H01', 'implementer', ['src/a']), /contract/);
+  assert.throws(() => checkCommand(f.root, f.policy, 'H01', 'implementer', 'test-pass'), /contract/);
+});
+
+test('source requirement permits bounded changes; preservation applies inside a broad editable scope and to command outputs', t => {
+  const f = controlledFixture(t);
+  assert(checkPaths(f.root, f.policy, 'H01', 'implementer', ['src/new.txt']));
+  assert.throws(() => checkPaths(f.root, f.policy, 'H01', 'implementer', ['src/기존 파일.txt']), /preserved/);
+  assert.throws(() => checkPaths(f.root, f.policy, 'H01', 'implementer', ['src/기존 파일.txt'], { commandOutput: true }), /preserved/);
+  const state = start(f.root, f.loaded(), 'H01', 'implementer');
+  fs.writeFileSync(path.join(f.root, 'src/기존 파일.txt'), 'overwritten');
+  assert.throws(() => audit(f.root, f.loaded(), state), /preserved/);
+});
+
+test('AI proposals, unresolved entries, and unlisted source paths cannot authorize invented buttons', t => {
+  const f = controlledFixture(t);
+  const contract = f.policy.approvedTasks[0].changeContract;
+  contract.requirements[0].paths = ['tests/**'];
+  contract.requirements.push({ id: 'P1', origin: 'proposal', sourceRef: 'AI suggestion', expectation: 'new launcher', action: 'add', paths: ['src/button'] });
+  f.save(); const state = start(f.root, f.loaded(), 'H01', 'implementer');
+  assert.throws(() => checkPaths(f.root, f.policy, 'H01', 'implementer', ['src/button']), /No approved requirement/);
+  contract.requirements.at(-1).origin = 'unresolved';
+  assert.throws(() => checkPaths(f.root, f.policy, 'H01', 'implementer', ['src/button']), /No approved requirement/);
+  fs.writeFileSync(path.join(f.root, 'src/unlisted'), 'invented');
+  assert.throws(() => audit(f.root, f.loaded(), state), /No approved requirement/);
+});
+
+test('baseline source must exist and current change/remove/merge approvals and requirement ids must be explicit', t => {
+  const f = controlledFixture(t); const contract = f.policy.approvedTasks[0].changeContract;
+  contract.baselineRefs = ['src/missing']; f.save();
+  assert.throws(() => start(f.root, f.loaded(), 'H01', 'implementer'), /missing/);
+  contract.baselineRefs = ['src/기존 파일.txt'];
+  for (const action of ['change', 'remove', 'merge']) {
+    contract.requirements[0].action = action; delete contract.requirements[0].approvalRef; f.save();
+    assert.throws(() => f.loaded(), /approval/);
+  }
+  contract.requirements[0].approvalRef = 'explicit current user permission';
+  contract.requirements[1].id = 'R1'; f.save(); assert.throws(() => f.loaded(), /mapping/);
+});
+
+test('patch delete/move and actual deletion need removal consent, not a general change permission', t => {
+  const f = controlledFixture(t); const contract = f.policy.approvedTasks[0].changeContract;
+  fs.writeFileSync(path.join(f.root, 'src/removable'), 'initial');
+  const patch = '*** Begin Patch\n*** Update File: src/removable\n*** Move to: src/moved\n@@\n-a\n+b\n*** Delete File: src/other\n*** End Patch';
+  assert.deepEqual(patchRemovedPaths(patch), ['src/removable', 'src/other']);
+  assert.throws(() => checkRemovedPaths(f.root, f.policy, 'H01', ['src/removable']), /Deletion approval/);
+  let state = start(f.root, f.loaded(), 'H01', 'implementer'); fs.unlinkSync(path.join(f.root, 'src/removable'));
+  assert.throws(() => audit(f.root, f.loaded(), state), /Deletion approval/);
+  fs.writeFileSync(path.join(f.root, 'src/removable'), 'initial');
+  contract.requirements.push({ id: 'D1', origin: 'user-confirmed', sourceRef: 'user-remove-request', expectation: 'remove only named file', action: 'remove', approvalRef: 'user-remove-request', paths: ['src/removable'] });
+  f.save(); assert(checkRemovedPaths(f.root, f.policy, 'H01', ['src/removable']) === undefined);
+  state = start(f.root, f.loaded(), 'H01', 'implementer'); fs.unlinkSync(path.join(f.root, 'src/removable'));
+  assert.deepEqual(audit(f.root, f.loaded(), state), ['src/removable']);
+});
+
+test('passing tests alone cannot complete a task that requires independent review', t => {
+  const f = controlledFixture(t); const loaded = f.loaded(); const state = start(f.root, loaded, 'H01', 'coordinator');
+  run(f.root, loaded, state, 'test-pass');
+  assert.throws(() => verify(f.root, loaded, state), /Independent review missing/);
+  assert.throws(() => review(f.root, loaded, state, 'pass'), /independent/);
+  const checker = start(f.root, loaded, 'H01', 'checker'); assert.throws(() => review(f.root, loaded, checker, 'pass'), /independent/);
+  const reviewer = start(f.root, loaded, 'H01', 'verifier');
+  review(f.root, loaded, reviewer, 'fail'); assert.throws(() => verify(f.root, loaded, state), /failed/);
+  review(f.root, loaded, reviewer, 'pass'); assert.equal(verify(f.root, loaded, state).status, 'verified');
+  assert.deepEqual(readState(f.root, 'H01', 'verifier').review.requirementIds, ['R1', 'R2']);
+});
+
+test('later source change invalidates review even after all automated checks are refreshed', t => {
+  const f = controlledFixture(t); const loaded = f.loaded(); const state = start(f.root, loaded, 'H01', 'coordinator');
+  run(f.root, loaded, state, 'test-pass'); const reviewer = start(f.root, loaded, 'H01', 'verifier'); review(f.root, loaded, reviewer, 'pass');
+  fs.writeFileSync(path.join(f.root, 'src/late-edit'), 'after review'); run(f.root, loaded, state, 'test-pass');
+  assert.throws(() => verify(f.root, loaded, state), /stale/);
+});
+
+test('minor direct verification remains possible when independent review is explicitly not required', t => {
+  const f = controlledFixture(t, false); const loaded = f.loaded(); const state = start(f.root, loaded, 'H01', 'coordinator');
+  run(f.root, loaded, state, 'test-pass'); assert.equal(verify(f.root, loaded, state).status, 'verified');
+});
+
+test('both hook adapters enforce missing review on Stop and removal on PreToolUse', t => {
+  const f = controlledFixture(t); const loaded = f.loaded(); const state = start(f.root, loaded, 'H01', 'implementer'); run(f.root, loaded, state, 'test-pass');
+  for (const adapter of ['codex', 'claude']) {
+    assert.throws(() => handle(f.root, adapter, { hook_event_name: 'Stop' }), /Independent review/);
+    assert.throws(() => handle(f.root, adapter, { hook_event_name: 'PreToolUse', tool_name: 'apply_patch', tool_input: { command: '*** Begin Patch\n*** Delete File: src/unapproved\n*** End Patch' } }), /Deletion approval/);
+  }
+});
+
+test('exact lifecycle/review wrappers work, while extra arguments and unauthorized review still fail', t => {
+  const f = fixture(t); const loaded = f.loaded(); const state = start(f.root, loaded, 'H01', 'implementer');
+  for (const command of ['start H01 implementer', 'guard H01 implementer src/a tests/b', 'verify H01 implementer']) assert(shellCommand(f.root, loaded, state, 'node scripts/harness/cli.mjs ' + command, f.root));
+  for (const command of ['verify H01 implementer extra', 'review H01 implementer pass', 'run H01 implementer test-pass extra', 'guard H01 implementer src/../참고자료/raw.txt']) assert.throws(() => shellCommand(f.root, loaded, state, 'node scripts/harness/cli.mjs ' + command, f.root));
+  const reviewer = start(f.root, loaded, 'H01', 'verifier'); assert(shellCommand(f.root, loaded, reviewer, 'node scripts/harness/cli.mjs review H01 verifier pass', f.root));
+});
+
+test('same approved scope cannot recapture the write-role baseline to hide an unauthorized edit', t => {
+  const f = controlledFixture(t); const loaded = f.loaded(); const state = start(f.root, loaded, 'H01', 'coordinator');
+  fs.writeFileSync(path.join(f.root, 'outside.txt'), 'outside scope');
+  assert.throws(() => audit(f.root, loaded, state), /Outside approved/);
+  assert.throws(() => start(f.root, loaded, 'H01', 'coordinator'), /Existing baseline/);
+});
+
+test('requirement and original inputs remain reviewed even when declared as registered command outputs', t => {
+  const f = controlledFixture(t); const loaded = f.loaded(); const state = start(f.root, loaded, 'H01', 'coordinator');
+  run(f.root, loaded, state, 'test-pass'); const reviewer = start(f.root, loaded, 'H01', 'verifier'); review(f.root, loaded, reviewer, 'pass');
+  run(f.root, loaded, state, 'write-output');
+  assert.throws(() => verify(f.root, loaded, state), /stale/);
+  run(f.root, loaded, state, 'test-pass'); assert.throws(() => verify(f.root, loaded, state), /Independent review.*stale/);
+});
+
+test('registered outputs cannot waive removal approval for an existing contracted source file', t => {
+  const f = controlledFixture(t, false);
+  fs.writeFileSync(path.join(f.root, 'src/remove-output.txt'), 'original');
+  fs.writeFileSync(path.join(f.root, 'src/argument script.mjs'), "import fs from 'node:fs'; fs.unlinkSync('src/remove-output.txt');\n");
+  f.policy.commands[1].outputs = ['src/**']; f.save(); const loaded = f.loaded(); const state = start(f.root, loaded, 'H01', 'coordinator');
+  assert.throws(() => run(f.root, loaded, state, 'write-output'), /Deletion approval/);
+  assert.equal(state.evidence['write-output'], undefined);
+});
+
+test('the actual CLI rejects unused arguments before loading policy or touching state', () => {
+  const cli = path.resolve('scripts/harness/cli.mjs');
+  for (const args of [['doctor', 'extra'], ['start', 'H01', 'verifier', 'extra'], ['run', 'H01', 'verifier', 'test-pass', 'extra'], ['review', 'H01', 'verifier', 'pass', 'extra'], ['verify', 'H01', 'verifier', 'extra']]) {
+    const result = spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
+    assert.equal(result.status, 2, args.join(' ')); assert.match(result.stderr, /arguments|Usage/);
+  }
+});
+
+test('exact guard wrappers support approved Korean and quoted space paths without accepting shell syntax', t => {
+  const f = controlledFixture(t); const loaded = f.loaded(); const state = start(f.root, loaded, 'H01', 'implementer');
+  for (const suffix of ['src/한글.txt', '"src/한글 공백.txt"']) assert(shellCommand(f.root, loaded, state, 'node scripts/harness/cli.mjs guard H01 implementer ' + suffix, f.root));
+  for (const suffix of ['"src/../참고자료/raw.txt"', '"src/a$(write).txt"', '"src/a`;write.txt"', '"src/a|write.txt"', '"src/unterminated', 'src/a;write']) assert.throws(() => shellCommand(f.root, loaded, state, 'node scripts/harness/cli.mjs guard H01 implementer ' + suffix, f.root));
 });

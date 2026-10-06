@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { loadPolicy, bounds, audit, checkPaths, parsePatch, checkCommand } from './core.mjs';
-import { projectRoot, readState, writeState, verify } from './cli.mjs';
+import { loadPolicy, bounds, audit, checkPaths, parsePatch, checkCommand, patchRemovedPaths, checkRemovedPaths } from './core.mjs';
+import { projectRoot, readState, writeState, verify, parseArguments } from './cli.mjs';
 
 export function normalize(event) {
   const tool = event.tool_name; const input = event.tool_input ?? {};
@@ -9,18 +9,23 @@ export function normalize(event) {
   if (['Edit', 'Write', 'MultiEdit'].includes(tool)) {
     if (!input.file_path) throw new Error('Unknown edit input'); return { kind: 'edit', paths: [input.file_path] };
   }
-  if (tool === 'apply_patch') return { kind: 'edit', paths: parsePatch(input.command ?? input.patch ?? input) };
+  if (tool === 'apply_patch') { const patch = input.command ?? input.patch ?? input; return { kind: 'edit', paths: parsePatch(patch), removedPaths: patchRemovedPaths(patch) }; }
   if (['Bash', 'PowerShell', 'exec_command'].includes(tool)) return { kind: 'shell', command: input.command ?? input.cmd, cwd: input.cwd ?? input.workdir ?? event.cwd };
   if (['Read', 'Glob', 'Grep', 'read_file', 'list_directory', 'WebSearch'].includes(tool)) return { kind: 'read' };
   throw new Error('Unknown tool mutation capability denied: ' + tool);
 }
 export function shellCommand(root, loaded, state, command, cwd) {
-  // Only one literal wrapper grammar is accepted. Shell parsing is deliberately absent.
-  const match = /^node scripts\/harness\/cli\.mjs (doctor|run ([A-Z][0-9]+) ([a-z]+) ([a-z0-9-]+))$/.exec(command ?? '');
-  if (!match || cwd && requireCwd(root, cwd) !== root) throw new Error('Shell must use exact registered harness wrapper');
-  if (match[1] === 'doctor') return true;
-  if (match[2] !== state.task || match[3] !== state.role) throw new Error('Shell task/role mismatch');
-  checkCommand(root, loaded.policy, state.task, state.role, match[4]); return true;
+  // Bounded literal argv, not a general shell parser. Quotes are only for guard paths.
+  const prefix = 'node scripts/harness/cli.mjs ';
+  if (typeof command !== 'string' || !command.startsWith(prefix) || /[;&|`$<>!\r\n']/.test(command) || cwd && requireCwd(root, cwd) !== root) throw new Error('Shell must use exact registered harness wrapper');
+  const raw = command.slice(prefix.length); const words = [...raw.matchAll(/"[^"]*"|[^\s"]+/g)].map(item => item[0]);
+  if (words.join(' ') !== raw || words.some((word, index) => word.startsWith('"') && (words[0] !== 'guard' || index < 3)) || words.some(word => !word.startsWith('"') && /[()]/.test(word))) throw new Error('Unsupported literal harness arguments');
+  const { action, task, role, rest = [] } = parseArguments(words.map(word => word.startsWith('"') ? word.slice(1, -1) : word));
+  if (action === 'doctor') return true;
+  if (task !== state.task || role !== state.role) throw new Error('Shell task/role mismatch');
+  if (action === 'run') checkCommand(root, loaded.policy, state.task, state.role, rest[0]);
+  else if (action === 'guard') checkPaths(root, loaded.policy, state.task, state.role, rest);
+  return true;
 }
 import path from 'node:path';
 function requireCwd(root, cwd) { return path.resolve(root, cwd); }
@@ -33,7 +38,7 @@ export function handle(root, adapter, event) {
   audit(root, loaded, state);
   const eventName = event.hook_event_name;
   const normalized = normalize(event);
-  if (normalized.kind === 'edit') checkPaths(root, loaded.policy, state.task, state.role, normalized.paths);
+  if (normalized.kind === 'edit') { checkPaths(root, loaded.policy, state.task, state.role, normalized.paths); checkRemovedPaths(root, loaded.policy, state.task, normalized.removedPaths ?? []); }
   if (normalized.kind === 'shell') shellCommand(root, loaded, state, normalized.command, normalized.cwd);
   if (eventName === 'Stop') {
     if (event.stop_hook_active) return { systemMessage: 'HARNESS Stop already blocked once; report incomplete verification.' };
