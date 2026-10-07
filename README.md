@@ -21,7 +21,7 @@ Host가 아직 없으면 먼저 `.venv`의 Python과 PyInstaller로 `./scripts/p
 
 나라장터를 열면 작은 리모컨이 표시됩니다. 확장 아이콘으로 다시 열 수 있습니다. 추출은 임시 표, 수집은 지정 URL·동일 프레임 화면 코드·업무번호/차수를 검사한 뒤 SQLite에 저장합니다. 기본 추출은 `tables`만, `설정 → 표시 → 추출`에서 전체로 변경할 수 있습니다. 원본 확인에서는 pointInfo도 유지됩니다.
 
-JS 런처는 확장 상세 페이지의 ‘사용자 스크립트 허용’ 설정이 필요합니다. 설정에서 입력하는 단축키는 리모컨이 있는 페이지에 적용됩니다. 브라우저 전체 단축키는 확장 프로그램의 단축키 화면에서도 지정할 수 있습니다. 기본은 수집 Alt+Shift+S, 문서 연결 Alt+Shift+D입니다. 문서는 이번 MVP에서 JSON 전달 파일까지만 준비합니다. [Chrome userScripts 공식 설명](https://developer.chrome.com/docs/extensions/reference/api/userScripts)
+JS 런처는 확장 상세 페이지의 ‘사용자 스크립트 허용’ 설정이 필요합니다. 설정에서 입력하는 단축키는 리모컨이 있는 페이지에 적용됩니다. 브라우저 전체 단축키는 확장 프로그램의 단축키 화면에서도 지정할 수 있습니다. 기본은 수집 Alt+Shift+S, 문서 연결 Alt+Shift+D입니다. 문서는 선택한 자료를 실행 중인 Studio lite의 연결 서식으로 보내 HWPX 파일을 만듭니다. 업무별 서식은 설정의 ‘문서 연결’에서 지정합니다. [Chrome userScripts 공식 설명](https://developer.chrome.com/docs/extensions/reference/api/userScripts)
 
 ## Grid
 
