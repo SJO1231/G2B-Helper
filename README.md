@@ -32,8 +32,6 @@ DB는 접수·입찰·계약을 구분하며 기본 최근 3개월 날짜 필터
 ## 검증과 경계
 
 ```powershell
-node scripts/harness/cli.mjs doctor
-node scripts/harness/cli.mjs start M01 implementer
 npm run verify:mvp
 ```
 

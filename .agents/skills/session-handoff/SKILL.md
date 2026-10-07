@@ -49,4 +49,4 @@ description: 긴 코딩 작업을 다른 세션·담당자에게 인계하거나
 
 ## G2B Helper 연결
 
-새 원장 없이 docs/process/P00.md의 기존 공정 기록에 task/role·실제 모델/effort·scope·명령·관측·미검증·다음 행동을 남긴다. .codex/harness-state/<TASK>-<ROLE>.json은 실행 baseline이며 사용자 승인 정본이 아니다. 현재 세션 hook 자동 로딩을 추정하지 않는다.
+새 원장 없이 해당 이슈·PR에 task/role·실제 모델/effort·scope·명령·관측·미검증·다음 행동을 남긴다. docs/process/P00.md는 과거 기록이며 새 공정 기록을 쓰지 않는다.

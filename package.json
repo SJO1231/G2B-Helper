@@ -24,7 +24,7 @@
     "test:extension:collection": "node scripts/verify-collection-aggregation.mjs",
     "test:extension:database": "node scripts/verify-extension-database.mjs",
     "build:mvp": "tsc --noEmit && node scripts/build-mvp.mjs",
-    "verify:mvp": "node scripts/harness/cli.mjs run M01 implementer mvp-typecheck && node scripts/harness/cli.mjs run M01 implementer mvp-test && node scripts/harness/cli.mjs run M01 implementer mvp-build && node scripts/harness/cli.mjs run M01 implementer mvp-host-build && node scripts/harness/cli.mjs run M01 implementer mvp-native-test && node scripts/harness/cli.mjs run M01 implementer mvp-ui-test && node scripts/harness/cli.mjs run M01 implementer mvp-package && node scripts/harness/cli.mjs run M01 implementer mvp-archive-test && node scripts/harness/cli.mjs verify M01 implementer",
+    "verify:mvp": "tsc --noEmit && vitest run tests/mvp && node scripts/build-mvp.mjs && node scripts/package-mvp.mjs --build-host-only && .venv\\Scripts\\python.exe -m unittest discover -s native/tests -p test_mvp.py -v && node scripts/verify-mvp-ui.mjs && node scripts/package-mvp.mjs && .venv\\Scripts\\python.exe scripts/verify-mvp-archive.py",
     "package:mvp": "node scripts/package-mvp.mjs --build-host"
   },
   "dependencies": {

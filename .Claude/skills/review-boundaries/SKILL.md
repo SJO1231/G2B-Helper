@@ -46,4 +46,4 @@ description: 아키텍처·공유 API·의미 판정·정본 문서의 소유가
 
 ## G2B Helper 연결
 
-docs/MVP.md는 요구, P00 harness-json은 승인·명령, root AGENTS.md는 공통 행동, CLAUDE.md는 포인터다. 참고자료/**와 prototypes/** 및 frozen은 보존하고 E:/Prodev/HWPX Studio는 read-only다. 새 검사기를 OS 보안 경계로 설명하지 않는다.
+docs/MVP.md는 요구, GitHub 이슈는 승인 범위, root AGENTS.md는 공통 행동, CLAUDE.md는 포인터다. 참고자료/**와 prototypes/** 및 frozen은 보존하고 E:/Prodev/HWPX Studio는 read-only다. 새 검사기를 OS 보안 경계로 설명하지 않는다.

@@ -54,4 +54,4 @@ description: 기능·리팩터링·문서·UI·산출물 변경의 완료 주장
 
 ## G2B Helper 연결
 
-node scripts/harness/cli.mjs run TASK ROLE COMMAND_ID 및 verify TASK ROLE로 현재 파일 상태의 근거를 대조한다. 검사 0건·대상 미발견·hook 미로딩·fail-open을 통과로 세지 않는다. 보호·미추적 파일 hash와 source 변경 뒤 stale 근거를 확인한다. CLI 로딩 smoke와 실제 hook 차단은 별도 판정한다.
+CI의 `npm run verify`와 이슈에 적은 검사로 현재 파일 상태의 근거를 대조한다. 검사 0건·대상 미발견·미실행을 통과로 세지 않는다. 보호·미추적 파일 hash와 source 변경 뒤 stale 근거를 확인한다.
