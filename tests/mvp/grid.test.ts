@@ -84,6 +84,15 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
+  it('returns selected active source rows once with hidden values intact and excludes blank slots', () => {
+    const handle=renderGrid(new FakeElement() as unknown as HTMLElement,{label:'문서 선택',rows:[{code:'0001',amount:'12345678901234567890.001',flag:false,blank:'',zero:0},{code:'0002'}],settings});
+    const table=state.tables[0];table.fire('tableBuilt');expect(handle.getSelectedRows()).toEqual([]);
+    const [a,b]=table.getRows();table.rangeCells=[[b.getCell('f0'),a.getCell('f0'),a.getCell('f1')]];
+    expect(handle.getSelectedRows()).toHaveLength(2);handle.setRowFilter(row=>row.code==='0001');
+    const selected=handle.getSelectedRows();expect(selected).toEqual([{sourceIndex:0,row:{code:'0001',amount:'12345678901234567890.001',flag:false,blank:'',zero:0}}]);
+    selected[0].row.code='changed';expect(handle.getSelectedRows()[0].row.code).toBe('0001');
+    handle.setRowFilter(()=>false);expect(handle.getSelectedRows()).toEqual([]);
+  });
   it('moves and hides selected columns as a group and undoes both without changing raw rows', () => {
     const parent = new FakeElement(), source = [{ code: '001', amount: '1.000000000000000001', flag: false, extra: 0 }];
     const handle = renderGrid(parent as unknown as HTMLElement, { label: '선택 열', rows: source, settings });
