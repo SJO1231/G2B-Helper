@@ -93,7 +93,8 @@ describe('MVP designated screen collection gate', () => {
     expect(denied.observations).toEqual([]);
     expect(denied.raw).toBe(raw);
     expect(denied.views.map(view => view.rows)).toEqual([[], [{ zero: 0, flag: false }]]);
-    for (const point of [receipt, { ...receipt, depth2: '01117' }, bid, { ...bid, depth3: '01175' }, contract, { ...contract, depth3: '01572' }]) expect(extractCapture(capture(point), undefined, defaultScreenRules).observations).toHaveLength(1);
+    for (const point of [receipt, { ...receipt, depth2: '01117' }, bid, contract]) expect(extractCapture(capture(point), undefined, defaultScreenRules).observations).toHaveLength(1);
+    for (const point of [{ ...bid, depth3: '01175' }, { ...contract, depth3: '01572' }]) for (const rules of [defaultScreenRules, undefined]) expect(extractCapture(capture(point), undefined, rules).observations).toEqual([]);
     expect(new Set(defaultScreenRules.map(rule => rule.id)).size).toBe(defaultScreenRules.length);
   });
 
@@ -197,14 +198,17 @@ describe('MVP parent content, items and qualifications', () => {
     expect(Object.hasOwn((result.raw as ReturnType<typeof capture>).pointInfo, 'ctrtDmndRcptNo')).toBe(false);
   });
 
-  for (const [point, noKey, ordKey, listDepth] of [[bid, 'bidPbancNo', 'bidPbancOrd', '01175'], [contract, 'ctrtNo', 'ctrtChgOrd', '01572']] as const) it('produces N observations for ' + noKey + ' list rows', () => {
+  for (const [point, stage, noKey, ordKey, listDepth] of [[bid, 'bid', 'bidPbancNo', 'bidPbancOrd', '01175'], [contract, 'contract', 'ctrtNo', 'ctrtChgOrd', '01572']] as const) it('produces N observations for ' + noKey + ' list rows once the list screen is added as a rule', () => {
     const { [noKey]: _number, [ordKey]: _order, ...screen } = point as Record<string, unknown>;
     const rows = [{ [noKey]: 'synthetic-01', [ordKey]: '00', count: 0 }, { [noKey]: 'synthetic-02', [ordKey]: '01', flag: false }];
-    const result = extractCapture(capture({ ...screen, depth3: listDepth }, { listing: rows, empty: [] }));
+    // Excluded by default (#17); a screen rule added in settings re-enables the list screen.
+    const rules = [...defaultScreenRules, { id: 'list', stage, urlPattern: '*', areaCd: '14', depth1: String(screen.depth1), depth2: String(screen.depth2), depth3: listDepth }];
+    expect(extractCapture(capture({ ...screen, depth3: listDepth }, { listing: rows, empty: [] })).observations).toEqual([]);
+    const result = extractCapture(capture({ ...screen, depth3: listDepth }, { listing: rows, empty: [] }), undefined, rules);
     expect(result.observations.map(entry => entry.identity)).toEqual([['synthetic-01', '00'], ['synthetic-02', '01']]);
     expect(result.observations.map(entry => entry.fields)).toEqual(rows);
     expect(result.observations.every(entry => !Object.hasOwn(entry.fields, 'areaCd'))).toBe(true);
-    expect(extractCapture(capture({ ...screen, depth3: listDepth }, { listing: [...rows, { [noKey]: 'incomplete' }] })).observations).toEqual([]);
+    expect(extractCapture(capture({ ...screen, depth3: listDepth }, { listing: [...rows, { [noKey]: 'incomplete' }] }), undefined, rules).observations).toEqual([]);
   });
 });
 

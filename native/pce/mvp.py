@@ -77,7 +77,8 @@ def validate_observation(observation, screen_rules=None):
     if screen_rules is None:
         require(source.get('areaCd') == '14' and source.get('depth1') == depth1 and source.get('depth2') in depth2, '등록된 화면 코드에서만 수집합니다.', 'SCREEN')
         if source.get('depth3') and stage in ('bid', 'contract'):
-            require(source['depth3'] in ({'01175', '01179'} if stage == 'bid' else {'01572', '01579'}), '등록되지 않은 하위 화면입니다.', 'SCREEN')
+            # Notice/contract management lists (01175/01572) are excluded by default (#17); saved screen rules can add them.
+            require(source['depth3'] in ({'01179'} if stage == 'bid' else {'01579'}), '등록되지 않은 하위 화면입니다.', 'SCREEN')
     else:
         matches = {rule['stage'] for rule in screen_rules if screen_rule_matches(rule, source)}
         require(matches == {stage}, '등록된 수집 화면 규칙이 일치하지 않거나 업무가 모호합니다.', 'SCREEN')

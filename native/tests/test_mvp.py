@@ -148,6 +148,21 @@ class MvpTests(unittest.TestCase):
         self.gateway.close(); self.gateway = MvpGateway(self.path)
         self.assertEqual(self.call('mvp.settings.read')['result'], saved)
 
+    def test_default_gate_excludes_management_list_screens_until_a_rule_adds_them(self):
+        # #17: notice (01175) and contract (01572) management lists are not collected by default.
+        cases = [('bid', '01179', '01175'), ('contract', '01579', '01572')]
+        def screen(stage, depth3):
+            source = observation(stage); source['source']['depth3'] = depth3
+            raw = json.loads(source['rawJson']); raw['pointInfo']['depth3'] = depth3; source['rawJson'] = json.dumps(raw, ensure_ascii=False)
+            return source
+        for stage, kept, excluded in cases:
+            self.assertNotIn('error', self.call('mvp.preview', {'observations': [screen(stage, kept)]}))
+            self.assertEqual(self.call('mvp.preview', {'observations': [screen(stage, excluded)]})['error']['code'], 'SCREEN')
+        rules = [{'id': 'list-' + stage, 'stage': stage, 'urlPattern': '*', 'areaCd': '14', 'depth1': screen(stage, excluded)['source']['depth1'], 'depth2': screen(stage, excluded)['source']['depth2'], 'depth3': excluded} for stage, _, excluded in cases]
+        self.assertNotIn('error', self.update_settings(screenRules=rules))
+        for stage, _, excluded in cases:
+            self.assertNotIn('error', self.call('mvp.preview', {'observations': [screen(stage, excluded)]}))
+
     def test_persisted_custom_rules_gate_source_and_keep_origin_allowlist(self):
         source = observation(); source['source'].update(url='https://www.g2b.go.kr/custom-page', areaCd='22', depth1='C1', depth2='C2', depth3='tab')
         raw = json.loads(source['rawJson']); raw['pointInfo'].update({key: source['source'][key] for key in ('areaCd', 'depth1', 'depth2', 'depth3')}); source['rawJson'] = json.dumps(raw)
