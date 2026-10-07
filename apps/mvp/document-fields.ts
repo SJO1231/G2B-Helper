@@ -37,7 +37,7 @@ export function summarizeChildren(item: DocumentItem, labels: Record<string, str
       const x = number(a[key]), y = number(b[key]);
       if (x && y) { if (!x.eq(y)) return x.lt(y); continue; }
       const sx = String(a[key] ?? ''), sy = String(b[key] ?? '');
-      if (sx !== sy) return sx < sy;
+      if (sx !== sy) return sy === '' || sx !== '' && sx < sy; // a missing order sorts last
     }
     return ai < bi;
   };

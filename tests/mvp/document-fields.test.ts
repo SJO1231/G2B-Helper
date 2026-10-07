@@ -30,6 +30,8 @@ describe('child table aggregation (user, 2026-10-07)', () => {
     const big = summarizeChildren(item({}, items([{ ctrtAmt: '12345678901234567890.0001', ctrtQty: '1' }, { ctrtAmt: '1,000', ctrtQty: '' }])), labels).values;
     expect(big).toMatchObject({ 합계_금액: '12345678901234568890.0001', 합계_수량: null, 대표_ctrtAmt: '12345678901234567890.0001' });
     expect(summarizeChildren(item({}, items([{ ctrtAmt: '', ctrtQty: '0' }])), labels).values).toMatchObject({ 합계_수량: '0', 합계_금액: null, 합계_단위: null, 품목수: 1 });
+    // Equal amounts: an item without an order number does not outrank a numbered one.
+    expect(summarizeChildren(item({}, items([{ ctrtAmt: '5', ctrtItemNm: '순번 없음' }, { ctrtAmt: '5', ctrtItemSqno: '7', ctrtItemNm: '순번 7' }])), labels).values.대표_ctrtItemNm).toBe('순번 7');
     expect(summarizeChildren(item({}), labels)).toEqual({ values: {}, itemRows: 0, otherRows: 2 });
   });
   it('stays exact for wide integers with long fractions', () => {
