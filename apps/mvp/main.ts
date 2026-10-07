@@ -4,6 +4,7 @@ import { defaultScreenRules, extractCapture, extractionViews, loadJson } from '.
 import { rpc, captureCurrentPage, runLauncher } from './bridge';
 import { RecordView } from './record-view';
 import { collectorBridge, documentItems, screenDocumentItems } from './integrations';
+import { documentCandidates, generationItem, planFields, summarizeChildren } from './document-fields';
 import type { DocumentItem, DocumentProfile, DocumentRequest, DocumentResult } from './contracts';
 import { columnTypeLabels, type MvpColumnType, type CollectionDecision, type CollectionPreview, type ExtractionResult, type ExtractionView, type GridRendererHandle, type GridViewState, type JsonRow, type MvpSettings, type ProcurementRecord, type ProcurementStage } from './contracts';
 import { dateColumnKeys, dateParts, rawText } from './grid-model';
@@ -149,6 +150,17 @@ async function documentSettings(content:HTMLElement){
   if(current&&!profiles.some(p=>p.id===current))choices.push([current,'연결된 서식을 찾을 수 없음']);
   const field=select(label+' 생성 서식',choices,current);field.onchange=()=>{const next={...settings.documentProfiles};if(field.value)next[key as ProcurementStage]=field.value;else delete next[key as ProcurementStage];settings.documentProfiles=next;};
   block.append(node('label',label),field);
+  // Field links saved from the generation dialog: template field name -> Helper source key (#21).
+  const links=current?settings.documentLinks?.[key as ProcurementStage]?.[current]||{}:{};
+  if(Object.keys(links).length){
+   const list=node('div',undefined,'document-links');list.append(node('small',`서식 필드 연결 ${Object.keys(links).length}개`));
+   for(const [name,source]of Object.entries(links)){
+    const line=node('div');
+    line.append(node('span',`${name} ← ${settings.dictionary.keys[source]?settings.dictionary.keys[source]+' · ':''}${source}`),button('연결 지우기',()=>{const stageLinks={...settings.documentLinks?.[key as ProcurementStage]},next={...stageLinks[current]};delete next[name];stageLinks[current]=next;settings.documentLinks={...settings.documentLinks,[key]:stageLinks};line.remove();}));
+    list.append(line);
+   }
+   block.append(list);
+  }
  }
  if(!profiles.length)block.append(node('p','Studio lite에서 먼저 Helper 연결 서식을 등록하세요.'));
 }
@@ -179,27 +191,96 @@ async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen
  }
  let profileReady=!!resume;
  const refreshSelection=()=>{const count=choices.filter(c=>c.checked).length;summary.textContent=`${kind==='db'?'DB':'현재 화면'} 자료 ${selected.length}건 · 선택 ${count}건`;run.disabled=!profileReady||count===0||count>100;};
- const connection=node('div'),resultArea=node('div'),run=button('생성',async()=>{
-  if(run.disabled)return;
-  if(!pending){
-   const chosenStage=stageField.value as ProcurementStage,profileId=settings.documentProfiles?.[chosenStage];if(!profileId)throw new Error('업무에 연결할 서식을 선택하세요.');
-   const items=fixedItems||documentItems(selected,context.kind==='db'?context:{...context,stage:chosenStage});
-   const chosen=items.filter((_,index)=>choices[index].checked);if(!chosen.length||chosen.length>100)throw new Error('생성할 자료를 1~100건 선택하세요.');
-   pending={requestId:crypto.randomUUID(),payload:{profileId,sourceKind:kind,items:chosen}};
+ const connection=node('div'),resultArea=node('div'),childNote=node('p');
+ let pending=resume,names:string[]=[],chosenItems:DocumentItem[]=[],profileId='',chosenStage='' as ProcurementStage|'';
+ const start=()=>{run.disabled=true;busy=true;closeButton.disabled=true;stageField.disabled=true;choices.forEach(choice=>choice.disabled=true);};
+ const finish=()=>{busy=false;closeButton.disabled=false;};
+ const again=(label:string)=>{run.textContent=label;run.disabled=false;};
+ const show=(result:DocumentResult)=>{
+  resultArea.replaceChildren(node('p',result.status==='success'?`${result.results.length}건 저장 완료`:'일부 자료는 확인이 필요합니다.'));
+  for(const item of result.results)resultArea.append(node('p',`${item.itemIndex+1}. ${item.status==='success'?item.path:(item.message||'생성하지 못했습니다.')+(item.missingFields?.length?` (${item.missingFields.join(', ')})`:'')}`));
+  if(result.status==='success'){run.textContent='완료';message(`${result.results.length}건 문서 저장 완료`);}else again('다시 확인');
+ };
+ // One fixed request: a lost reply keeps it for a same-ID retry; any returned reply ends it.
+ const send=async(request:{requestId:string;payload:DocumentRequest}):Promise<DocumentResult|undefined>=>{
+  pending=request;unconfirmedDocumentRequest=request;resultArea.replaceChildren(node('p','생성 중…'));
+  try{const result=await rpc<DocumentResult>('mvp.document.generate',request.payload as unknown as Record<string,unknown>,request.requestId);unconfirmedDocumentRequest=pending=undefined;return result;}
+  catch(error){resultArea.replaceChildren(node('p',error instanceof Error?error.message:String(error)));again('같은 요청 다시 시도');return undefined;}
+ };
+ const labels=()=>settings.dictionary.keys;
+ const savedLinks=():Record<string,string>=>chosenStage?settings.documentLinks?.[chosenStage]?.[profileId]||{}:{};
+ const saveLinks=async(add:Record<string,string>)=>{
+  if(!chosenStage||!Object.keys(add).length)return;
+  const stageLinks=settings.documentLinks?.[chosenStage]||{};
+  settings.documentLinks={...settings.documentLinks,[chosenStage]:{...stageLinks,[profileId]:{...stageLinks[profileId],...add}}};await saveSettings();
+ };
+ const plans=()=>chosenItems.map(item=>planFields(names,item,labels(),savedLinks()));
+ const generate=async(options:{acceptEmpty?:boolean;blank?:string[]})=>{
+  const planned=plans();let drop:string[]=[];
+  for(let attempt=0;attempt<2;attempt++){
+   const result=await send({requestId:crypto.randomUUID(),payload:{profileId,sourceKind:kind,items:chosenItems.map((item,index)=>generationItem(item,planned[index],{...options,drop}))}});
+   if(!result)return;
+   const collisions=[...new Set(result.results.filter(r=>r.code==='FIELD_COLLISION').flatMap(r=>r.conflicts||[]))];
+   // A Helper key named like a Column-mapped template field: send without it once.
+   if(attempt===0&&collisions.length&&!collisions.some(name=>names.includes(name))){drop=collisions;continue;}
+   const missing=[...new Set(result.results.filter(r=>r.code==='MISSING_FIELDS'||r.code==='MISSING_CONDITION_FIELDS').flatMap(r=>r.missingFields||[]))].filter(name=>!names.includes(name));
+   if(missing.length){names=[...names,...missing];await review();return;}
+   show(result);return;
   }
-  run.disabled=true;busy=true;closeButton.disabled=true;stageField.disabled=true;choices.forEach(choice=>choice.disabled=true);resultArea.replaceChildren(node('p','생성 중…'));
+ };
+ const blankChoice=' blank';
+ const review=async(accepted=false):Promise<void>=>{
+  const planned=plans();
+  const learned=Object.fromEntries(planned.flatMap(plan=>Object.entries(plan.learned)).filter(([name])=>!Object.hasOwn(savedLinks(),name)));
+  await saveLinks(learned);
+  const unmatched=[...new Set(planned.flatMap(plan=>plan.unmatched))],emptyCount=new Map<string,number>();
+  for(const plan of planned)for(const name of plan.empty)emptyCount.set(name,(emptyCount.get(name)||0)+1);
+  if(!unmatched.length&&(!emptyCount.size||accepted)){await generate({acceptEmpty:accepted});return;}
+  const box=node('div',undefined,'document-review'),picks=new Map<string,HTMLSelectElement>();
+  if(unmatched.length){
+   box.append(node('p','서식에서 맞는 값을 찾지 못한 항목입니다. 원천 키를 고르면 이 업무·서식에 저장해 다음부터 자동으로 넣습니다.'));
+   const options:[string,string][]=[['','원천 키 선택'],[blankChoice,'이번에는 빈 값으로 둠'],...[...documentCandidates(chosenItems[0],labels()).keys()].map(key=>[key,labels()[key]?`${labels()[key]} · ${key}`:key]as[string,string])];
+   for(const name of unmatched){const pick=select(name+' 연결',options),line=node('label',undefined,'document-link');picks.set(name,pick);line.append(node('span',name),pick);box.append(line);}
+  }
+  let acceptEmpty:HTMLInputElement|undefined;
+  if(emptyCount.size){
+   box.append(node('p','이번 자료에서 값이 비어 있는 항목: '+[...emptyCount].map(([name,count])=>chosenItems.length>1?`${name}(${count}건)`:name).join(', ')));
+   acceptEmpty=input('빈 값으로 넣고 생성','checkbox');const line=node('label');line.append(acceptEmpty,'빈 값으로 넣고 생성');box.append(line);
+  }
+  box.append(button(unmatched.length?'연결 저장 후 생성':'생성 계속',async()=>{
+   const chosen=[...picks].map(([name,pick])=>[name,pick.value]as const);
+   if(chosen.some(([,value])=>!value))throw new Error('맞지 않는 항목마다 원천 키를 고르거나 빈 값으로 두기를 고르세요.');
+   if(acceptEmpty&&!acceptEmpty.checked)throw new Error('빈 값으로 넣을지 확인하세요.');
+   start();
+   try{
+    await saveLinks(Object.fromEntries(chosen.filter(([,value])=>value!==blankChoice)));
+    // New links can expose empty values the user has not seen yet.
+    if(plans().some(plan=>plan.empty.some(name=>!emptyCount.has(name)))){await review();return;}
+    await generate({acceptEmpty:!!acceptEmpty,blank:chosen.filter(([,value])=>value===blankChoice).map(([name])=>name)});
+   }finally{finish();}
+  }));
+  resultArea.replaceChildren(box);
+ };
+ const run=button('생성',async()=>{
+  if(run.disabled)return;
+  start();
   try{
-   unconfirmedDocumentRequest=pending;
-   const result=await rpc<DocumentResult>('mvp.document.generate',pending.payload as unknown as Record<string,unknown>,pending.requestId);
-   unconfirmedDocumentRequest=undefined;
-   resultArea.replaceChildren(node('p',result.status==='success'?`${result.results.length}건 저장 완료`:'일부 자료는 확인이 필요합니다.'));
-   for(const item of result.results)resultArea.append(node('p',`${item.itemIndex+1}. ${item.status==='success'?item.path:item.message||'생성하지 못했습니다.'}`));
-   if(result.status==='success'){run.textContent='완료';message(`${result.results.length}건 문서 저장 완료`);}
-   else{run.textContent='같은 요청 다시 시도';run.disabled=false;resultArea.append(node('p','값·서식을 보완한 뒤 새로 생성하려면 이 창을 닫고 자료를 다시 선택하세요.'));}
-  }catch(error){resultArea.replaceChildren(node('p',error instanceof Error?error.message:String(error)));run.textContent='같은 요청 다시 시도';run.disabled=false;}
-  finally{busy=false;closeButton.disabled=false;}
+   if(pending){const result=await send(pending);if(result)show(result);return;}
+   chosenStage=stageField.value as ProcurementStage;profileId=settings.documentProfiles?.[chosenStage]||'';if(!profileId)throw new Error('업무에 연결할 서식을 선택하세요.');
+   if(!chosenItems.length){const items=fixedItems||documentItems(selected,context.kind==='db'?context:{...context,stage:chosenStage});chosenItems=items.filter((_,index)=>choices[index].checked);}
+   if(!chosenItems.length||chosenItems.length>100)throw new Error('생성할 자료를 1~100건 선택하세요.');
+   const children=chosenItems.map(item=>summarizeChildren(item,labels())),itemRows=children.reduce((n,c)=>n+c.itemRows,0),otherRows=children.reduce((n,c)=>n+c.otherRows,0);
+   childNote.textContent=(itemRows?`물품 ${itemRows}행은 대표 품목·합계로 보냅니다.`:'')+(otherRows?` 그 밖의 하위 표 ${otherRows}행은 넣지 않습니다.`:'');
+   resultArea.replaceChildren(node('p','서식 항목을 확인하는 중…'));
+   // Studio's 1st edition has no field-list endpoint: an item without data makes it list every field the template needs.
+   const probe=await rpc<DocumentResult>('mvp.document.generate',{profileId,sourceKind:kind,items:[{...chosenItems[0],fields:{},userValues:{},children:[]}]});
+   const first=probe.results[0];
+   if(probe.status==='success'){resultArea.replaceChildren(node('p','서식에 채울 항목이 없어 1개 파일로 저장했습니다.'),node('p',first?.path||''));run.textContent='완료';message('문서 저장 완료');return;}
+   if(first?.code!=='MISSING_FIELDS'||!first.missingFields?.length){resultArea.replaceChildren(node('p',first?.message||'서식 항목을 확인하지 못했습니다.'));again('다시 확인');return;}
+   names=first.missingFields;await review();
+  }catch(error){resultArea.replaceChildren(node('p',error instanceof Error?error.message:String(error)));again(pending?'같은 요청 다시 시도':'다시 확인');}
+  finally{finish();}
  });
- let pending=resume;
  const connect=async()=>{
   connection.replaceChildren();profileReady=false;refreshSelection();const chosenStage=stageField.value as ProcurementStage;if(!chosenStage)return;
   if(!native)throw new Error('문서 생성은 확장 프로그램에서 사용할 수 있습니다.');
@@ -215,7 +296,7 @@ async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen
  stageField.onchange=()=>{void connect().catch(connectFailure);};
  choices.forEach(choice=>choice.onchange=refreshSelection);
  body.append(summary,detail);if(selected.length>100)body.append(node('p','한 번에 100건까지 선택하세요.'));
- body.append(stageField,connection,run,resultArea);refreshSelection();
+ body.append(stageField,connection,run,childNote,resultArea);refreshSelection();
  if(resume){connection.append(node('p','이전 요청의 저장 결과를 확인하지 못했습니다. 새 자료를 보내기 전에 같은 요청의 결과를 확인합니다.'));stageField.disabled=true;run.textContent='같은 요청 다시 시도';}
  else await connect().catch(connectFailure);
 }

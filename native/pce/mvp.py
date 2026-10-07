@@ -31,6 +31,15 @@ def default_user_values(stage):
 def valid_user_column_keys(keys):
     return isinstance(keys, list) and len(keys) <= 500 and all(isinstance(key, str) and key.strip() for key in keys) and len(set(keys)) == len(keys)
 
+def valid_document_links(links):
+    """Per stage and template profile: template field name -> Helper source key (#21)."""
+    text = lambda value: isinstance(value, str) and 0 < len(value) <= 200
+    return isinstance(links, dict) and all(
+        stage in IDENTITIES and isinstance(profiles, dict) and all(
+            text(profile) and isinstance(fields, dict) and len(fields) <= 2000 and all(text(name) and text(source) for name, source in fields.items())
+            for profile, fields in profiles.items())
+        for stage, profiles in links.items())
+
 def default_settings():
     return {'theme': 'light', 'extractionMode': 'tables', 'hideEmptyColumns': True, 'hideUnmappedColumns': False, 'hideEmptyTables': False,
             'dictionary': {'keys': DEFAULTS['KEY_LABELS'], 'values': DEFAULTS['CODE_SEED']}, 'launchers': [],
@@ -316,6 +325,7 @@ class MvpGateway:
             require(isinstance(settings.get('columnLocks', {}), dict) and all(isinstance(key, str) and type(value) is bool for key, value in settings.get('columnLocks', {}).items()), '열 잠금은 체크값 목록이어야 합니다.')
             require('screenRules' not in settings or valid_screen_rules(settings['screenRules']), '수집 화면 규칙을 확인하세요.')
             require(isinstance(settings.get('documentProfiles', {}), dict) and all(k in IDENTITIES and isinstance(v, str) and 0 < len(v) <= 200 for k, v in settings.get('documentProfiles', {}).items()), '업무별 문서 서식을 확인하세요.')
+            require(valid_document_links(settings.get('documentLinks', {})), '업무·서식별 필드 연결을 확인하세요.')
             require(isinstance(settings.get('shortcuts', {}), dict) and all(k in ('extract', 'collect', 'db', 'document', 'launcher') and isinstance(v, str) for k, v in settings.get('shortcuts', {}).items()), '단축키를 확인하세요.')
             require(isinstance(settings.get('userColumns', {}), dict) and all(stage in IDENTITIES and valid_user_column_keys(columns) for stage, columns in settings.get('userColumns', {}).items()), '사용자 열 설정을 확인하세요.')
             require(all(key not in settings or isinstance(settings[key], str) and settings[key].strip() for key in ('contractEndField', 'contractAmountField')), '계약 계산 기준 열을 확인하세요.')
