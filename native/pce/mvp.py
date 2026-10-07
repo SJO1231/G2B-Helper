@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 from .model import Fault, require, dumps, loads, digest, empty
 from .dictionary_seed import DEFAULTS
+from .documents import COMMANDS as DOCUMENT_COMMANDS, forward as document_forward
 
 IDENTITIES = {'receipt': ['ctrtDmndRcptNo', 'ctrtDmndRcptOrd'], 'bid': ['bidPbancNo', 'bidPbancOrd'], 'contract': ['ctrtNo', 'ctrtChgOrd']}
 SCREENS = {'receipt': ('01001', {'01114', '01117'}), 'bid': ('01173', {'01174'}), 'contract': ('01570', {'01571'})}
@@ -314,6 +315,7 @@ class MvpGateway:
                     and ('dateFormat' not in value or isinstance(value['dateFormat'], str) and value['dateFormat'] in ('dot', 'dash', 'compact')) for value in formats.values()), '열 서식을 확인하세요.')
             require(isinstance(settings.get('columnLocks', {}), dict) and all(isinstance(key, str) and type(value) is bool for key, value in settings.get('columnLocks', {}).items()), '열 잠금은 체크값 목록이어야 합니다.')
             require('screenRules' not in settings or valid_screen_rules(settings['screenRules']), '수집 화면 규칙을 확인하세요.')
+            require(isinstance(settings.get('documentProfiles', {}), dict) and all(k in IDENTITIES and isinstance(v, str) and 0 < len(v) <= 200 for k, v in settings.get('documentProfiles', {}).items()), '업무별 문서 서식을 확인하세요.')
             require(isinstance(settings.get('shortcuts', {}), dict) and all(k in ('extract', 'collect', 'db', 'document', 'launcher') and isinstance(v, str) for k, v in settings.get('shortcuts', {}).items()), '단축키를 확인하세요.')
             require(isinstance(settings.get('userColumns', {}), dict) and all(stage in IDENTITIES and valid_user_column_keys(columns) for stage, columns in settings.get('userColumns', {}).items()), '사용자 열 설정을 확인하세요.')
             require(all(key not in settings or isinstance(settings[key], str) and settings[key].strip() for key in ('contractEndField', 'contractAmountField')), '계약 계산 기준 열을 확인하세요.')
@@ -330,6 +332,10 @@ class MvpGateway:
             require(isinstance(request, dict) and type(request.get('protocolVersion')) is int and request['protocolVersion'] == 1 and isinstance(rid, str) and 0 < len(rid) <= 200, '요청 버전/번호를 확인하세요.')
             command, payload = request.get('command'), request.get('payload')
             require(isinstance(command, str) and isinstance(payload, dict), '명령/본문 형식을 확인하세요.')
+            if command in DOCUMENT_COMMANDS:
+                # No Helper write transaction is held while the generator runs.
+                response['result'] = document_forward(command, payload, rid)
+                return response
             with self.lock:
                 fingerprint = digest(request)
                 cached = self.db.execute('SELECT fingerprint,response FROM mvp_requests WHERE request_id=?', (rid,)).fetchone()

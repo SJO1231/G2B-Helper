@@ -3,7 +3,8 @@ import { renderGrid } from './grid';
 import { defaultScreenRules, extractCapture, extractionViews, loadJson } from './extractor';
 import { rpc, captureCurrentPage, runLauncher } from './bridge';
 import { RecordView } from './record-view';
-import { collectorBridge, documentPayload } from './integrations';
+import { collectorBridge, documentItems, screenDocumentItems } from './integrations';
+import type { DocumentItem, DocumentProfile, DocumentRequest, DocumentResult } from './contracts';
 import { columnTypeLabels, type MvpColumnType, type CollectionDecision, type CollectionPreview, type ExtractionResult, type ExtractionView, type GridRendererHandle, type GridViewState, type JsonRow, type MvpSettings, type ProcurementRecord, type ProcurementStage } from './contracts';
 import { dateColumnKeys, dateParts, rawText } from './grid-model';
 import { setIcon } from './icons';
@@ -62,6 +63,7 @@ const finishSelected=button('종결',()=>handle?.toggleSelectedBoolean(recordVie
 finishSelected.title='선택한 계약 행의 종결 체크를 반전합니다. 변경 후 저장하세요.';
 const tabList=node('div',undefined,'tab-list'),tabActions=node('div',undefined,'tab-actions');tabActions.append(finishSelected,hiddenUser,search);tabs.append(tabList,tabActions);
 const exports=node('div',undefined,'export-actions');exports.append(button('원본 JSON',()=>rawDialog(isDb?records.map(r=>({recordId:r.recordId,rawJson:r.rawJson})):extraction?.raw||{})),button('JSON',()=>download(JSON.stringify(exportJson(),null,2),'g2b-tables.json')),button('CSV',()=>handle?.exportCsv('g2b-table.csv')),button('Excel',()=>handle?.exportExcel('g2b-table.xlsx')),save,importFile);toolbar.append(filters,exports);
+const generateButton=button('생성',()=>generateDocuments());exports.insertBefore(generateButton,save);
 function exportJson(){if(isDb)return handle?.rows()||[];if(!extraction)return{};const tables=Object.fromEntries(extractionViews(extraction,'tables').map(v=>[v.key,temporaryBuffers.get(v.key)||v.rows]));if(settings.extractionMode==='all'){const points=extractionViews(extraction,'all').filter(v=>!Object.hasOwn(tables,v.key));return{pointInfo:points.length===1?(temporaryBuffers.get(points[0].key)||points[0].rows)[0]||{}:Object.fromEntries(points.map(v=>[v.key,(temporaryBuffers.get(v.key)||v.rows)[0]||{}])),tables};}return{tables};}
 const start=input('시작일'),end=input('종료일');start.className=end.className='date-field';start.placeholder=end.placeholder='YYYY.MM.DD';
 const today=new Date();end.value=dateText(today);const initial=new Date(today);initial.setMonth(initial.getMonth()-3);start.value=dateText(initial);
@@ -125,17 +127,118 @@ function generalSettings(content:HTMLElement,d:HTMLDialogElement){
 }
 function showSettings(){const original=structuredClone(settings);const {d,head,body}=dialog('설정'), navigation=node('nav',undefined,'tabs'), content=node('div',undefined,'settings-content');d.classList.add('settings-dialog');body.append(navigation,content);
  const views:{label:string;render:()=>void}[]=[{label:'일반',render:()=>generalSettings(content,d)},{label:'키 사전',render:()=>dictionary(content,'keys')},{label:'값 사전',render:()=>dictionary(content,'values')},{label:'수집 화면',render:()=>screenRulesEditor(content)},{label:'단축키',render:()=>{for(const [action,label]of [['collect','수집'],['extract','추출'],['db','DB'],['document','문서 연결'],['launcher','런처']]){const line=node('div',undefined,'shortcut-line'),field=input(label);field.value=settings.shortcuts?.[action as keyof NonNullable<MvpSettings['shortcuts']>]||'';field.readOnly=true;field.placeholder='여기서 키를 누르세요';field.onkeydown=e=>{if(e.key==='Tab')return;e.preventDefault();if(e.key==='Escape')return;if(e.key==='Backspace'||e.key==='Delete')field.value='';else if(!['Alt','Shift','Control','Meta'].includes(e.key))field.value=[e.ctrlKey?'Ctrl':'',e.altKey?'Alt':'',e.shiftKey?'Shift':'',e.metaKey?'Meta':'',e.key.toUpperCase()].filter(Boolean).join('+');(settings.shortcuts??={})[action as keyof NonNullable<MvpSettings['shortcuts']>]=field.value;};line.append(node('span',label),field);content.append(line);}content.append(node('p','브라우저 전체 단축키: 확장 프로그램 → 단축키','demo-mark'));}}];
+ views.push({label:'문서 연결',render:()=>{void documentSettings(content).catch(error=>{if(content.isConnected)content.append(node('p',String(error instanceof Error?error.message:error)));});}});
  let current=views[0];for(const view of views)navigation.append(button(view.label,()=>{current=view;content.replaceChildren();view.render();}));current.render();let accepted=false;head.insertBefore(iconButton('save','저장',async()=>{try{await saveSettings();}catch(error){content.replaceChildren();current.render();throw error;}accepted=true;d.close();if(extraction&&mode!=='db')showExtraction();}),head.lastElementChild);d.addEventListener('close',()=>{if(!accepted){settings=original;theme();}});
 }
 function showLauncher(){
  destroyGrid();settingsButton.hidden=toolbar.hidden=filters.hidden=tabs.hidden=true;shell.classList.add('launcher-shell');heading.textContent='런처 추가';const label=input('버튼 이름'),script=node('textarea');label.placeholder='버튼 이름';script.placeholder='JavaScript';script.setAttribute('aria-label','JavaScript');const editor=node('div',undefined,'launcher-editor');
  const add=button('저장',async()=>{if(add.disabled)return;if(!label.value.trim()||!script.value.trim())throw new Error('이름과 스크립트를 입력하세요.');const launcher={id:crypto.randomUUID(),label:label.value.trim(),script:script.value};add.disabled=true;settings.launchers=[...settings.launchers,launcher];try{await saveSettings();label.value=script.value='';message('버튼 추가됨');}catch(error){settings.launchers=settings.launchers.filter(item=>item.id!==launcher.id);theme();throw error;}finally{add.disabled=false;}});add.classList.add('primary');editor.append(label,script,add);area.append(editor);
 }
-function documentBridge(){destroyGrid();toolbar.hidden=filters.hidden=tabs.hidden=true;heading.textContent='문서 연결';const source=extraction?.raw||records;area.append(button('JSON 전달 파일',()=>download(JSON.stringify(documentPayload(source),null,2),'document-input.json')));}
+async function availableDocumentProfiles(){
+ if(!native)throw new Error('문서 생성은 확장 프로그램과 Studio lite 연결이 필요합니다.');
+ return(await rpc<{profiles:DocumentProfile[]}>('mvp.document.profiles')).profiles;
+}
+async function documentSettings(content:HTMLElement){
+ const block=node('div');content.append(block);block.append(node('p','Studio lite에서 저장한 서식을 업무에 연결합니다. 서식과 저장 폴더는 Studio lite의 Helper 연결에서 관리합니다.'));
+ let profiles:DocumentProfile[];
+ try{profiles=await availableDocumentProfiles();}catch(error){if(block.isConnected)block.append(node('p',error instanceof Error?error.message:String(error)));return;}
+ if(!block.isConnected)return;
+ for(const [key,label]of Object.entries(stageLabels)){
+  const current=settings.documentProfiles?.[key as ProcurementStage]||'';
+  const choices:[string,string][]=[['','연결 안 함'],...profiles.map(p=>[p.id,p.label]as[string,string])];
+  if(current&&!profiles.some(p=>p.id===current))choices.push([current,'연결된 서식을 찾을 수 없음']);
+  const field=select(label+' 생성 서식',choices,current);field.onchange=()=>{const next={...settings.documentProfiles};if(field.value)next[key as ProcurementStage]=field.value;else delete next[key as ProcurementStage];settings.documentProfiles=next;};
+  block.append(node('label',label),field);
+ }
+ if(!profiles.length)block.append(node('p','Studio lite에서 먼저 Helper 연결 서식을 등록하세요.'));
+}
+let unconfirmedDocumentRequest:{requestId:string;payload:DocumentRequest}|undefined;
+async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen'|'db'}){
+ if(generateButton.disabled)return;
+ const resume=unconfirmedDocumentRequest;
+ const explicit=structuredClone(resume?.payload.items||entry?.items);
+ const selected=explicit?explicit.map((item,sourceIndex)=>({sourceIndex,row:item.fields})):structuredClone(handle?.getSelectedRows()||[]);if(!selected.length)throw new Error('생성할 행의 셀을 선택하세요.');
+ const kind=resume?.payload.sourceKind||entry?.sourceKind||(isDb?'db':'screen'),selectedStage=explicit?.[0]?.stage||(isDb?stage:activeView?.stage);
+ if(explicit&&explicit.some(item=>item.stage!==selectedStage))throw new Error('같은 업무의 자료를 선택하세요.');
+ if(!explicit&&!activeView)throw new Error('생성할 표를 확인하세요.');
+ const context=isDb?{kind:'db' as const,records:structuredClone(records),recordIds:JSON.parse(area.dataset.recordIds||'[]') as string[],view:recordView!}:{kind:'screen' as const,view:structuredClone(activeView!)};
+ // Capture edited DB values before profile loading or any other asynchronous work.
+ const fixedItems=explicit||(context.kind==='db'?documentItems(selected,context):selectedStage?documentItems(selected,{...context,stage:selectedStage}):undefined);
+ generateButton.disabled=true;
+ const {d,body}=dialog('문서 생성');d.classList.add('document-dialog');d.addEventListener('close',()=>{generateButton.disabled=false;});
+ let busy=false;const closeButton=d.querySelector<HTMLButtonElement>('.titlebar button')!;
+ d.addEventListener('cancel',event=>{if(busy)event.preventDefault();});
+ const summary=node('p'),detail=node('div',undefined,'document-candidates'),choices:HTMLInputElement[]=[];
+ const stageField=select('생성 업무',[['','업무 선택'],...Object.entries(stageLabels)]as[string,string][],selectedStage);stageField.disabled=!!selectedStage;
+ for(const [index,entry]of selected.entries()){
+  const choice=input(`자료 ${index+1} 선택`,'checkbox');choice.checked=selected.length<=100;choice.disabled=!!resume;choices.push(choice);
+  const item=fixedItems?.[index],identity=item?.identity||[];
+  const values=Object.values(entry.row).filter(v=>(typeof v==='string'||typeof v==='number'||typeof v==='boolean')&&!identity.includes(String(v))).slice(0,3);
+  const description=[...(item?[stageLabels[item.stage],identity.join(' / ')]:[]),...values.map(String)].join(' · ');
+  const label=node('label'),text=node('span',description.slice(0,240)||`자료 ${index+1}`);text.title=description;label.append(choice,text);detail.append(label);
+ }
+ let profileReady=!!resume;
+ const refreshSelection=()=>{const count=choices.filter(c=>c.checked).length;summary.textContent=`${kind==='db'?'DB':'현재 화면'} 자료 ${selected.length}건 · 선택 ${count}건`;run.disabled=!profileReady||count===0||count>100;};
+ const connection=node('div'),resultArea=node('div'),run=button('생성',async()=>{
+  if(run.disabled)return;
+  if(!pending){
+   const chosenStage=stageField.value as ProcurementStage,profileId=settings.documentProfiles?.[chosenStage];if(!profileId)throw new Error('업무에 연결할 서식을 선택하세요.');
+   const items=fixedItems||documentItems(selected,context.kind==='db'?context:{...context,stage:chosenStage});
+   const chosen=items.filter((_,index)=>choices[index].checked);if(!chosen.length||chosen.length>100)throw new Error('생성할 자료를 1~100건 선택하세요.');
+   pending={requestId:crypto.randomUUID(),payload:{profileId,sourceKind:kind,items:chosen}};
+  }
+  run.disabled=true;busy=true;closeButton.disabled=true;stageField.disabled=true;choices.forEach(choice=>choice.disabled=true);resultArea.replaceChildren(node('p','생성 중…'));
+  try{
+   unconfirmedDocumentRequest=pending;
+   const result=await rpc<DocumentResult>('mvp.document.generate',pending.payload as unknown as Record<string,unknown>,pending.requestId);
+   unconfirmedDocumentRequest=undefined;
+   resultArea.replaceChildren(node('p',result.status==='success'?`${result.results.length}건 저장 완료`:'일부 자료는 확인이 필요합니다.'));
+   for(const item of result.results)resultArea.append(node('p',`${item.itemIndex+1}. ${item.status==='success'?item.path:item.message||'생성하지 못했습니다.'}`));
+   if(result.status==='success'){run.textContent='완료';message(`${result.results.length}건 문서 저장 완료`);}
+   else{run.textContent='같은 요청 다시 시도';run.disabled=false;resultArea.append(node('p','값·서식을 보완한 뒤 새로 생성하려면 이 창을 닫고 자료를 다시 선택하세요.'));}
+  }catch(error){resultArea.replaceChildren(node('p',error instanceof Error?error.message:String(error)));run.textContent='같은 요청 다시 시도';run.disabled=false;}
+  finally{busy=false;closeButton.disabled=false;}
+ });
+ let pending=resume;
+ const connect=async()=>{
+  connection.replaceChildren();profileReady=false;refreshSelection();const chosenStage=stageField.value as ProcurementStage;if(!chosenStage)return;
+  if(!native)throw new Error('문서 생성은 확장 프로그램에서 사용할 수 있습니다.');
+  const generationKey=chosenStage,profiles=await availableDocumentProfiles();if(!d.open||stageField.value!==generationKey)return;
+  const current=settings.documentProfiles?.[chosenStage],profile=profiles.find(p=>p.id===current);
+  if(profile){connection.append(node('p','서식: '+profile.label));profileReady=true;resultArea.replaceChildren();refreshSelection();return;}
+  connection.append(node('p','이 업무에 사용할 서식을 한 번 연결하세요.'));
+  const choice=select('연결할 서식',[['','서식 선택'],...profiles.map(p=>[p.id,p.label]as[string,string])]);
+  connection.append(choice,button('서식 연결 저장',async()=>{if(!choice.value)throw new Error('서식을 선택하세요.');settings.documentProfiles={...settings.documentProfiles,[chosenStage]:choice.value};await saveSettings();await connect();}));
+  if(!profiles.length)connection.append(node('p','Studio lite의 Helper 연결에서 서식을 먼저 등록하세요.'));
+ };
+ const connectFailure=(error:unknown)=>{resultArea.replaceChildren(node('p',error instanceof Error?error.message:String(error)),button('연결 다시 확인',()=>connect().catch(connectFailure)));};
+ stageField.onchange=()=>{void connect().catch(connectFailure);};
+ choices.forEach(choice=>choice.onchange=refreshSelection);
+ body.append(summary,detail);if(selected.length>100)body.append(node('p','한 번에 100건까지 선택하세요.'));
+ body.append(stageField,connection,run,resultArea);refreshSelection();
+ if(resume){connection.append(node('p','이전 요청의 저장 결과를 확인하지 못했습니다. 새 자료를 보내기 전에 같은 요청의 결과를 확인합니다.'));stageField.disabled=true;run.textContent='같은 요청 다시 시도';}
+ else await connect().catch(connectFailure);
+}
+async function documentDb(reason:string){
+ toolbar.hidden=tabs.hidden=false;heading.textContent='DB';
+ const stages=new Set(extraction?.views.map(view=>view.stage).filter(Boolean));const suggested=stages.size===1?[...stages][0]!:stage;
+ try{await loadRecords(suggested);message(reason);}
+ catch(error){destroyGrid();area.append(node('p',reason,'empty'),node('p',error instanceof Error?error.message:String(error),'empty'),button('DB 다시 불러오기',()=>documentDb(reason)));message('DB를 불러오지 못했습니다.',true);}
+}
+async function documentBridge(){
+ const items=screenDocumentItems(extraction?.observations||[]);
+ if(!items.length){await documentDb(extraction?.warnings.length?'현재 화면의 업무 자료를 확인할 수 없습니다. DB에서 자료를 선택하세요.':'현재 화면에 연결된 자료가 없습니다. DB에서 자료를 선택하세요.');return;}
+ isDb=false;heading.textContent='문서 생성';toolbar.hidden=tabs.hidden=true;destroyGrid();
+ const start=node('div',undefined,'document-start');start.append(node('p',`현재 화면에서 ${items.length}건을 읽었습니다.`),button('자료 다시 선택',()=>generateDocuments({items,sourceKind:'screen'})),button('DB에서 선택',()=>documentDb('DB에서 자료를 선택하고 생성 버튼을 누르세요.')));area.append(start);message('');
+ await generateDocuments({items,sourceKind:'screen'});
+}
 function demoRecords(type:ProcurementStage):ProcurementRecord[]{const identityKeys={receipt:['ctrtDmndRcptNo','ctrtDmndRcptOrd'],bid:['bidPbancNo','bidPbancOrd'],contract:['ctrtNo','ctrtChgOrd']}[type];return Array.from({length:24},(_,i)=>({stage:type,identity:[`SAMPLE-${String(i+1).padStart(3,'0')}`,'01'],recordId:'sample-'+i,storeVersion:1,fields:{[identityKeys[0]]:`SAMPLE-${String(i+1).padStart(3,'0')}`,[identityKeys[1]]:'01',사업명:'회의실 물품 구매 '+(i+1),수량:i===0?0:i,완료:false,ctrtAmt:'35608652.5',ctrtDt:dateText(today).replaceAll('.',''),dlvgdsTermYmd:'20261027',빈열:'',비고:{검토:['규격','수량']}},children:[{key:'items',label:'물품',kind:'items',rows:[{품명:'복합기',수량:1,단가:'35608652.5'}]}],source:{url:'https://www.g2b.go.kr/',areaCd:'14',depth1:'01570',depth2:'01571',framePath:'top'},rawJson:'{"sample":true}',capturedAt:'2026-10-01T00:00:00Z',userValues:type==='contract'?{종결:i===2,지정일:'20261101',종결금액:'1000',선금보증기한:'',선금보증금액:''}:{담당:'예시'}}));}
 async function boot(){if(native){try{const response=await rpc<{settings:MvpSettings;storeVersion:number}>('mvp.settings.read',{});settings=response.settings;settingsVersion=response.storeVersion;}catch(error){fail(error);}}settings.columnTypes={...defaultColumnTypes,...settings.columnTypes};confirmedSettings=structuredClone(settings);theme();
  if(mode==='db'){stage=(params.get('stage')||'receipt') as ProcurementStage;if(!Object.hasOwn(stageLabels,stage))stage='receipt';await loadRecords(stage);}
- else if(mode==='launcher')showLauncher();else if(mode==='settings')showSettings();else{const contractDemo=demoRecords('contract'),demoView=new RecordView(contractDemo,'contract',settings);extraction=native?extractCapture(await captureCurrentPage(tabId),undefined,settings.screenRules):extractCapture({pointInfo:{areaCd:'14',depth1:'01570',depth2:'01571',depth3:'01579'},tables:{접수목록:demoRecords('receipt').map(r=>r.fields),계약목록:contractDemo.map(r=>demoView.toRow(r)),빈표:[]}},undefined,settings.screenRules);if(mode==='collect')await collect();else{showExtraction();if(mode==='document')documentBridge();}}}
+ else if(mode==='launcher')showLauncher();else if(mode==='settings')showSettings();else{const contractDemo=demoRecords('contract'),demoView=new RecordView(contractDemo,'contract',settings);
+  try{extraction=native?extractCapture(await captureCurrentPage(tabId),undefined,settings.screenRules):extractCapture({pointInfo:{areaCd:'14',depth1:'01570',depth2:'01571',depth3:'01579'},tables:{접수목록:demoRecords('receipt').map(r=>r.fields),계약목록:contractDemo.map(r=>demoView.toRow(r)),빈표:[]}},undefined,settings.screenRules);}
+  catch(error){if(mode!=='document')throw error;await documentDb('현재 화면을 읽지 못했습니다. DB에서 자료를 선택하세요.');status.title+=' '+(error instanceof Error?error.message:String(error));return;}
+  if(mode==='collect')await collect();else if(mode==='document')await documentBridge();else showExtraction();}}
 window.addEventListener('keydown',event=>{if(event.key==='Escape'&&!event.defaultPrevented&&!document.querySelector('dialog[open]')){event.preventDefault();close();}});
 window.addEventListener('beforeunload',event=>{rememberView();if(dirty){event.preventDefault();event.returnValue='';}});
 void boot().catch(fail);
