@@ -1,11 +1,14 @@
 /** Public synthetic fixtures only. */
 import { describe, expect, it } from 'vitest';
-import { documentCandidates, generationItem, planFields, studioKey, summarizeChildren } from '../../apps/mvp/document-fields';
+import { childRowCount, documentCandidates, generationItem, planFields, studioKey } from '../../apps/mvp/document-fields';
 import type { DocumentItem } from '../../apps/mvp/contracts';
 
-const labels = { ctrtNo: '계약번호', ctrtNm: '계약건명', ctrtAmt: '계약금액', ctrtItemNm: '계약물품명', ctrtQty: '계약수량', ctrtUntVal: '단위', dmstUntyGrpNm: '수요기관명', 다른키: '계약건명' };
-const items = (rows: Record<string, unknown>[]) => [{ key: 'items', label: '물품', kind: 'items' as const, rows }, { key: 'files', label: '첨부', kind: 'other' as const, rows: [{ name: 'a' }, { name: 'b' }] }];
-const item = (fields: Record<string, unknown>, children = items([])): DocumentItem => ({ stage: 'contract', identity: ['0000123', '00'], fields, userValues: { 담당: '합성 담당', 종결: false }, children, source: { url: 'https://www.g2b.go.kr/', framePath: 'top' } });
+const labels = { ctrtNo: '계약번호', ctrtNm: '계약건명', ctrtAmt: '계약금액', ctrtItemNm: '계약물품명', dmstUntyGrpNm: '수요기관명', 다른키: '계약건명' };
+const children = [
+  { key: 'items', label: '물품', kind: 'items' as const, rows: [{ ctrtItemNm: '합성 품목', ctrtAmt: '5', ctrtQty: '2' }, { ctrtItemNm: '합성 품목 둘', ctrtAmt: '7', ctrtQty: '1' }] },
+  { key: 'files', label: '첨부', kind: 'other' as const, rows: [{ name: 'a' }] }
+];
+const item = (fields: Record<string, unknown>): DocumentItem => ({ stage: 'contract', identity: ['0000123', '00'], fields, userValues: { 담당: '합성 담당', 종결: false }, children, source: { url: 'https://www.g2b.go.kr/', framePath: 'top' } });
 
 describe('Studio 1st-edition key rule', () => {
   it('rejects the empty-name and other keys Studio refuses, accepts Korean, spaces, dots and hyphens', () => {
@@ -14,45 +17,26 @@ describe('Studio 1st-edition key rule', () => {
   });
 });
 
-describe('child table aggregation (user, 2026-10-07)', () => {
-  const rows = [
-    { ctrtItemSqno: '2', ctrtItemNm: '합성 둘', ctrtAmt: '1000', ctrtQty: '3', ctrtUntVal: '개' },
-    { ctrtItemSqno: '1', ctrtItemNm: '합성 하나', ctrtAmt: '1000', ctrtQty: '2.5', ctrtUntVal: '박스', spec: { nested: true } },
-    { ctrtItemSqno: '3', ctrtItemNm: '합성 셋', ctrtAmt: '999', ctrtQty: '1', ctrtUntVal: 'EA' }
-  ];
-  it('picks the largest amount (tie: smaller item order) with all its values, sums quantity across units and uses its unit', () => {
-    const summary = summarizeChildren(item({}, items(rows)), labels);
-    expect(summary).toMatchObject({ itemRows: 3, otherRows: 2 });
-    expect(summary.values).toMatchObject({ 대표_ctrtItemSqno: '1', 대표_ctrtItemNm: '합성 하나', 대표_계약물품명: '합성 하나', 대표_계약금액: '1000', 합계_수량: '6.5', 합계_금액: '2999', 합계_단위: '박스', 품목수: 3 });
-    expect(Object.hasOwn(summary.values, '대표_spec')).toBe(false);
+describe('only the record\'s stored values fill templates (user, 2026-10-08)', () => {
+  it('counts the child rows that are left out', () => {
+    expect(childRowCount(item({}))).toBe(3);
   });
-  it('keeps exact decimals and reports an unusable total as empty instead of guessing', () => {
-    const big = summarizeChildren(item({}, items([{ ctrtAmt: '12345678901234567890.0001', ctrtQty: '1' }, { ctrtAmt: '1,000', ctrtQty: '' }])), labels).values;
-    expect(big).toMatchObject({ 합계_금액: '12345678901234568890.0001', 합계_수량: null, 대표_ctrtAmt: '12345678901234567890.0001' });
-    expect(summarizeChildren(item({}, items([{ ctrtAmt: '', ctrtQty: '0' }])), labels).values).toMatchObject({ 합계_수량: '0', 합계_금액: null, 합계_단위: null, 품목수: 1 });
-    // Equal amounts: an item without an order number does not outrank a numbered one.
-    expect(summarizeChildren(item({}, items([{ ctrtAmt: '5', ctrtItemNm: '순번 없음' }, { ctrtAmt: '5', ctrtItemSqno: '7', ctrtItemNm: '순번 7' }])), labels).values.대표_ctrtItemNm).toBe('순번 7');
-    expect(summarizeChildren(item({}), labels)).toEqual({ values: {}, itemRows: 0, otherRows: 2 });
+  it('never takes a value from a child table, and computes no representative or total', () => {
+    const plan = planFields(['계약물품명', 'ctrtQty', '합계_금액', '대표_ctrtItemNm', '품목수'], item({ ctrtNo: '1' }), labels);
+    expect(plan.unmatched).toEqual(['계약물품명', 'ctrtQty', '합계_금액', '대표_ctrtItemNm', '품목수']);
+    const keys = [...documentCandidates(item({ ctrtNo: '1' })).keys()];
+    expect(keys).toEqual(['ctrtNo', '담당', '종결']);
   });
-  it('stays exact for wide integers with long fractions', () => {
-    const wide = summarizeChildren(item({}, items([{ ctrtAmt: '1234567890123456789012345', ctrtQty: '0.000000000000001' }, { ctrtAmt: '0.123456789012345', ctrtQty: '1' }])), labels).values;
-    expect(wide).toMatchObject({ 합계_금액: '1234567890123456789012345.123456789012345', 합계_수량: '1.000000000000001' });
-  });
-  it('breaks bid ties by classification number then item order, and skips names Studio would reject', () => {
-    const bid: DocumentItem = { ...item({}), stage: 'bid', children: [{ key: 'items', label: '물품', kind: 'items', rows: [
-      { bidClsfNo: '2', bidPbancItemSqno: '1', rowAmtSum: '10', dtlsPrnmNm: '둘-하나', '': '잔여', long: 'x'.repeat(50000) },
-      { bidClsfNo: '1', bidPbancItemSqno: '9', rowAmtSum: '10', dtlsPrnmNm: '하나-아홉', '': '잔여', long: 'x'.repeat(50000) } ] }] };
-    const values = summarizeChildren(bid, {}).values;
-    expect(values.대표_dtlsPrnmNm).toBe('하나-아홉');
-    expect(Object.hasOwn(values, '대표_') || Object.hasOwn(values, '대표_long')).toBe(false);
+  it('uses the record value even when a child row has the same key', () => {
+    expect(planFields(['ctrtAmt'], item({ ctrtAmt: '38400000' }), labels).values).toEqual({ ctrtAmt: '38400000' });
   });
 });
 
 describe('template field matching (user, 2026-10-07)', () => {
-  const fields = { ctrtNo: '0000123', ctrtNm: '합성 건명', ctrtAmt: '38400000', dmstUntyGrpNm: '', 다른키: 'x', '': '화면 잔여', nested: { a: 1 } };
+  const fields = { ctrtNo: '0000123', ctrtNm: '합성 건명', ctrtAmt: '38400000', dmstUntyGrpNm: '', 다른키: 'x', '': '화면 잔여', nested: { a: 1 }, long: 'x'.repeat(50000) };
   it('uses a saved link, then the same source key, then exactly one display label (recorded quietly)', () => {
-    const plan = planFields(['ctrtNo', '계약금액', '담당부서', '수요기관명', '계약건명', '담당', '합계_금액'], item(fields, items([{ ctrtAmt: '5' }])), labels, { 담당부서: 'dmstUntyGrpNm' });
-    expect(plan.sources).toEqual({ ctrtNo: 'ctrtNo', 계약금액: 'ctrtAmt', 담당부서: 'dmstUntyGrpNm', 수요기관명: 'dmstUntyGrpNm', 담당: '담당', 합계_금액: '합계_금액' });
+    const plan = planFields(['ctrtNo', '계약금액', '담당부서', '수요기관명', '계약건명', '담당'], item(fields), labels, { 담당부서: 'dmstUntyGrpNm' });
+    expect(plan.sources).toEqual({ ctrtNo: 'ctrtNo', 계약금액: 'ctrtAmt', 담당부서: 'dmstUntyGrpNm', 수요기관명: 'dmstUntyGrpNm', 담당: '담당' });
     expect(plan.learned).toEqual({ 계약금액: 'ctrtAmt', 수요기관명: 'dmstUntyGrpNm' });
     expect(plan.unmatched).toEqual(['계약건명']); // two source keys carry this label
     expect(plan.empty).toEqual(['담당부서', '수요기관명']);
@@ -61,14 +45,14 @@ describe('template field matching (user, 2026-10-07)', () => {
     expect(planFields(['ctrtNo'], item({ ctrtNo: '1', other: '2' }), { other: 'ctrtNo' }).unmatched).toEqual(['ctrtNo']);
   });
   it('offers only values Studio accepts as candidates', () => {
-    const keys = [...documentCandidates(item(fields), labels).keys()];
+    const keys = [...documentCandidates(item(fields)).keys()];
     expect(keys).toContain('ctrtNo'); expect(keys).toContain('담당');
-    expect(keys.includes('') || keys.includes('nested')).toBe(false);
+    expect(keys.some(key => ['', 'nested', 'long'].includes(key))).toBe(false);
   });
 });
 
 describe('generation item', () => {
-  const source = item({ ctrtNo: '0000123', ctrtAmt: '38400000', 담당: '원천 담당', '': '화면 잔여', nested: { a: 1 }, zero: 0, flag: false, blank: '' }, items([{ ctrtAmt: '1' }]));
+  const source = item({ ctrtNo: '0000123', ctrtAmt: '38400000', 담당: '원천 담당', '': '화면 잔여', nested: { a: 1 }, zero: 0, flag: false, blank: '' });
   const plan = planFields(['계약금액', '비고', '수요기관명'], source, { ...labels, blank: '수요기관명' });
   it('sends acceptable values, planned names and no child rows; empty planned values stay null until accepted', () => {
     const sent = generationItem(source, plan);

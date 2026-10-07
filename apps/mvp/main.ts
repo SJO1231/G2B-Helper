@@ -4,7 +4,7 @@ import { defaultScreenRules, extractCapture, extractionViews, loadJson } from '.
 import { rpc, captureCurrentPage, runLauncher } from './bridge';
 import { RecordView } from './record-view';
 import { collectorBridge, documentItems, screenDocumentItems } from './integrations';
-import { documentCandidates, generationItem, planFields, summarizeChildren } from './document-fields';
+import { childRowCount, documentCandidates, generationItem, planFields } from './document-fields';
 import type { DocumentItem, DocumentProfile, DocumentRequest, DocumentResult } from './contracts';
 import { columnTypeLabels, type MvpColumnType, type CollectionDecision, type CollectionPreview, type ExtractionResult, type ExtractionView, type GridRendererHandle, type GridViewState, type JsonRow, type MvpSettings, type ProcurementRecord, type ProcurementStage } from './contracts';
 import { dateColumnKeys, dateParts, rawText } from './grid-model';
@@ -252,7 +252,7 @@ async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen
   const box=node('div',undefined,'document-review'),picks=new Map<string,HTMLSelectElement>();
   if(unmatched.length){
    box.append(node('p','서식에서 맞는 값을 찾지 못한 항목입니다. 원천 키를 고르면 이 업무·서식에 저장해 다음부터 자동으로 넣습니다.'));
-   const keys=[...new Set(chosenItems.flatMap(item=>[...documentCandidates(item,labels()).keys()]))];
+   const keys=[...new Set(chosenItems.flatMap(item=>[...documentCandidates(item).keys()]))];
    const options:[string,string][]=[['','원천 키 선택'],[blankChoice,'이번에는 빈 값으로 둠'],...keys.map(key=>[key,labels()[key]?`${labels()[key]} · ${key}`:key]as[string,string])];
    for(const name of unmatched){const pick=select(name+' 연결',options),line=node('label',undefined,'document-link');picks.set(name,pick);line.append(node('span',name),pick);box.append(line);}
   }
@@ -284,8 +284,8 @@ async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen
    chosenStage=stageField.value as ProcurementStage;profileId=settings.documentProfiles?.[chosenStage]||'';if(!profileId)throw new Error('업무에 연결할 서식을 선택하세요.');
    if(!chosenItems.length&&!saved.length){const items=fixedItems||documentItems(selected,context.kind==='db'?context:{...context,stage:chosenStage});chosenItems=items.filter((_,index)=>choices[index].checked);}
    if(!chosenItems.length||chosenItems.length>100)throw new Error('생성할 자료를 1~100건 선택하세요.');
-   const children=chosenItems.map(item=>summarizeChildren(item,labels())),itemRows=children.reduce((n,c)=>n+c.itemRows,0),otherRows=children.reduce((n,c)=>n+c.otherRows,0);
-   childNote.textContent=(itemRows?`물품 ${itemRows}행은 대표 품목·합계로 보냅니다.`:'')+(otherRows?` 그 밖의 하위 표 ${otherRows}행은 넣지 않습니다.`:'');
+   const childRows=chosenItems.reduce((count,item)=>count+childRowCount(item),0);
+   childNote.textContent=childRows?`하위 표 ${childRows}행은 이번 서식에 넣지 않습니다.`:'';
    resultArea.replaceChildren(node('p','서식 항목을 확인하는 중…'));
    // Studio's 1st edition has no field-list endpoint: an item without data makes it list every value the template needs.
    const probe=await rpc<DocumentResult>('mvp.document.generate',{profileId,sourceKind:kind,items:[{...chosenItems[0],fields:{},userValues:{},children:[]}]});
