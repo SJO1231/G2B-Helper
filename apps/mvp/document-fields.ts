@@ -9,15 +9,14 @@ const empty = (value: unknown): boolean => value === undefined || value === null
 /** Child rows are not sent (user, 2026-10-08); the dialog shows how many are left out. */
 export const childRowCount = (item: DocumentItem): number => item.children.reduce((count, child) => count + child.rows.length, 0);
 
-interface Candidate { value: unknown; from: 'fields' | 'userValues'; }
 /**
  * Every value Studio can accept for this item, keyed by the name a template could use. Only the record's own
  * stored values (including user edits and user columns) are candidates; child tables are not (user, 2026-10-08).
  */
-export function documentCandidates(item: DocumentItem): Map<string, Candidate> {
-  const candidates = new Map<string, Candidate>();
-  for (const [from, source] of [['fields', item.fields], ['userValues', item.userValues]] as const)
-    for (const [key, value] of Object.entries(source)) if (studioKey(key) && scalar(value) && !candidates.has(key)) candidates.set(key, { value, from });
+export function documentCandidates(item: DocumentItem): Map<string, unknown> {
+  const candidates = new Map<string, unknown>();
+  for (const source of [item.fields, item.userValues])
+    for (const [key, value] of Object.entries(source)) if (studioKey(key) && scalar(value) && !candidates.has(key)) candidates.set(key, value);
   return candidates;
 }
 
@@ -35,7 +34,7 @@ export function planFields(names: string[], item: DocumentItem, labels: Record<s
     const matches = [...new Set([...(candidates.has(name) ? [name] : []), ...byLabel.get(name) || []])];
     if (!source && matches.length === 1) { source = matches[0]; if (source !== name) plan.learned[name] = source; }
     if (!source) { plan.unmatched.push(name); continue; }
-    plan.sources[name] = source; plan.values[name] = candidates.get(source)?.value;
+    plan.sources[name] = source; plan.values[name] = candidates.get(source);
     if (empty(plan.values[name])) plan.empty.push(name);
   }
   return plan;

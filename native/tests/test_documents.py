@@ -62,7 +62,7 @@ class DocumentTests(unittest.TestCase):
 
     def test_document_field_links_are_validated_per_stage_and_profile(self):
         settings = self.gateway.dispatch('mvp.settings.read', {})
-        settings['settings']['documentLinks'] = {'contract': {'test': {'담당부서': 'dmstUntyGrpNm', '합계 금액': '합계_금액'}}}
+        settings['settings']['documentLinks'] = {'contract': {'test': {'담당부서': 'dmstUntyGrpNm', '계약 금액': 'ctrtAmt'}}}
         self.assertIn('result', self.call('mvp.settings.save', settings))
         self.assertEqual(self.gateway.dispatch('mvp.settings.read', {})['settings']['documentLinks']['contract']['test']['담당부서'], 'dmstUntyGrpNm')
         for links in ({'unknown': {'test': {'a': 'b'}}}, {'contract': {'test': {'a': ''}}}, {'contract': {'': {'a': 'b'}}},
