@@ -29,7 +29,7 @@ const manifest = {
   content_security_policy: { extension_pages: "script-src 'self'; object-src 'self'" },
   commands: {
     'mvp.collect': { suggested_key: { default: 'Alt+Shift+S' }, description: '현재 화면 수집 비교창 열기' },
-    'mvp.document': { suggested_key: { default: 'Alt+Shift+D' }, description: '문서 연결 JSON 열기' },
+    'mvp.document': { suggested_key: { default: 'Alt+Shift+D' }, description: '문서 생성 열기' },
     'mvp.extract': { description: '현재 화면 임시 추출창 열기' },
     'mvp.db': { description: 'DB Grid 열기' },
     'mvp.launcher': { description: '사용자 JS 런처 열기' }

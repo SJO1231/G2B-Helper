@@ -3,7 +3,7 @@ import { performWorkAction, type WorkActionRequest, type WorkActionResult } from
 import type { MvpEnvelope, MvpResponse } from './contracts';
 
 export const NATIVE_HOST = 'com.sjo1231.g2b_helper';
-const commands = new Set(['mvp.health', 'mvp.preview', 'mvp.apply', 'mvp.records', 'mvp.edit', 'mvp.trash', 'mvp.restore', 'mvp.settings.read', 'mvp.settings.save']);
+const commands = new Set(['mvp.health', 'mvp.preview', 'mvp.apply', 'mvp.records', 'mvp.edit', 'mvp.trash', 'mvp.restore', 'mvp.settings.read', 'mvp.settings.save', 'mvp.document.profiles', 'mvp.document.generate']);
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const failure = (error: unknown): string => error instanceof Error ? error.message : String(error);
 export function isG2bUrl(value?: string): boolean {
@@ -69,7 +69,7 @@ export function createNativeClient(runtime: NativeRuntime, limits: NativeLimits 
         try {
           if (new TextEncoder().encode(JSON.stringify(envelope)).byteLength > maxRequest) throw new Error('Native 요청 전체 크기 한도를 초과했습니다.');
           const connection = connect();
-          const timer = setTimeout(() => finish(envelope.requestId, undefined, new Error('Native 응답 시간 초과. 동일 요청 ID로 재시도하세요.')), limits.timeoutMs ?? 45000);
+          const timer = setTimeout(() => finish(envelope.requestId, undefined, new Error('Native 응답 시간 초과. 동일 요청 ID로 재시도하세요.')), limits.timeoutMs ?? (envelope.command === 'mvp.document.generate' ? 150000 : 45000));
           waiting.set(envelope.requestId, { resolve, reject, timer, parts: new Map(), bytes: 0 });
           connection.postMessage(envelope);
         } catch (error) { if (waiting.has(envelope.requestId)) finish(envelope.requestId, undefined, new Error(failure(error))); else reject(new Error(failure(error))); }

@@ -442,8 +442,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
       const next: MvpColumnFormat = {};
       if (['number', 'money', 'percent'].includes(type || '')) { if (number !== undefined) next.decimals = number; next.grouping = grouping.checked; }
       if (type === 'date' || type === 'datetime') next.dateFormat = date.value as MvpColumnFormat['dateFormat'];
-      settings.columnFormats = Object.fromEntries([...Object.entries(settings.columnFormats || {}).filter(([key]) => key !== column.key), [column.key, next]]);
-      handle.setSettings(settings); options.onColumnFormat?.(column.key, next); closePanel();
+      handle.setSettings({ ...settings, columnFormats: { ...settings.columnFormats, [column.key]: next } }); options.onColumnFormat?.(column.key, next); closePanel();
     }));
   }
   function openNested(cell: CellComponent, column: GridColumn): void {
@@ -591,12 +590,19 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
   host.addEventListener('click', focusSelection); root.addEventListener('keydown', keydown, true);
   const handle: GridRendererHandle = {
     rows: () => structuredClone(rows()),
+    getSelectedRows: () => {
+      if (!ready) return [];
+      const ids = new Set(selected().map(cell => (cell.getRow().getData() as GridBufferRow)._mvpRow));
+      return buffer('active').filter(row => ids.has(row._mvpRow) && !model.blankSlot(row)).map(row => ({ sourceIndex: row._mvpRow, row: structuredClone(model.decode(row)) }));
+    },
     getViewState: (): GridViewState => ({ search: view.search, combine: view.combine, userColumnsVisible, filters: structuredClone([...view.filters]), columns: ready ? table.getColumns().flatMap(column => { const source = getColumn(column.getField()); return source ? [{ key: source.key, width: column.getWidth(), visible: column.isVisible() }] : []; }) : saved?.columns || [], sorters: ready ? table.getSorters().flatMap(sort => { const column = getColumn(sort.field); return column ? [{ key: column.key, dir: sort.dir }] : []; }) : saved?.sorters || [] }),
     setSearch: search => { view.search = search; whenReady(applyFilter); },
     setRowFilter: predicate => { rowFilter = predicate; whenReady(applyFilter); },
     setSettings: next => {
       const hideChanged = next.hideEmptyColumns !== settings.hideEmptyColumns || next.hideUnmappedColumns !== settings.hideUnmappedColumns;
+      const columnsChanged = (['hideEmptyColumns', 'hideUnmappedColumns', 'dictionary', 'columnTypes', 'columnFormats', 'columnLocks'] as const).some(key => JSON.stringify(next[key]) !== JSON.stringify(settings[key]));
       settings = structuredClone(next); root.dataset.theme = settings.theme;
+      if (!columnsChanged) return;
       whenReady(() => {
         for (const column of table.getColumns()) if (getColumn(column.getField())) widths.set(column.getField(), column.getWidth());
         if (hideChanged) visibility.clear();

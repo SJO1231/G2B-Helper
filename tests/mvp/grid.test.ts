@@ -84,6 +84,58 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
+  it('returns selected active source rows once with hidden values intact and excludes blank slots', () => {
+    const handle=renderGrid(new FakeElement() as unknown as HTMLElement,{label:'문서 선택',rows:[{code:'0001',amount:'12345678901234567890.001',flag:false,blank:'',zero:0},{code:'0002'}],settings});
+    const table=state.tables[0];table.fire('tableBuilt');expect(handle.getSelectedRows()).toEqual([]);
+    const [a,b]=table.getRows();table.rangeCells=[[b.getCell('f0'),a.getCell('f0'),a.getCell('f1')]];
+    expect(handle.getSelectedRows()).toHaveLength(2);handle.setRowFilter(row=>row.code==='0001');
+    const selected=handle.getSelectedRows();expect(selected).toEqual([{sourceIndex:0,row:{code:'0001',amount:'12345678901234567890.001',flag:false,blank:'',zero:0}}]);
+    selected[0].row.code='changed';expect(handle.getSelectedRows()[0].row.code).toBe('0001');
+    handle.setRowFilter(()=>false);expect(handle.getSelectedRows()).toEqual([]);
+  });
+  it('keeps the sheet and selection intact when settings close unchanged or only the theme changes', async () => {
+    const handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '설정 닫기', rows: [{ code: '001', amount: '1234' }], settings });
+    const table = state.tables[0]; table.fire('tableBuilt');
+    table.rangeCells = [[table.getRows()[0].getCell('f0')]];
+    const update = vi.spyOn(table, 'updateColumnDefinition');
+    handle.setSettings(structuredClone(settings));
+    handle.setSettings({ ...settings, theme: 'dark', shortcuts: { launcher: 'Alt+Shift+L' } });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(update).not.toHaveBeenCalled(); expect(table.getRanges()).toHaveLength(1);
+    expect(handle.rows()).toEqual([{ code: '001', amount: '1234' }]); handle.destroy();
+  });
+  it('keeps the selected rows when the document dialog saves a profile link', async () => {
+    const handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '문서 서식 연결', rows: [{ code: '001', amount: '1234' }, { code: '002', amount: '5' }], settings });
+    const table = state.tables[0]; table.fire('tableBuilt');
+    table.rangeCells = [[table.getRows()[1].getCell('f0')]];
+    const before = handle.getSelectedRows();
+    const update = vi.spyOn(table, 'updateColumnDefinition');
+    handle.setSettings({ ...settings, documentProfiles: { contract: 'profile-1' } });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(update).not.toHaveBeenCalled(); expect(table.getRanges()).toHaveLength(1);
+    expect(before).toEqual([{ sourceIndex: 1, row: { code: '002', amount: '5' } }]); expect(handle.getSelectedRows()).toEqual(before);
+    handle.destroy();
+  });
+  it('still redraws columns when a column setting changes', async () => {
+    const handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '열 설정 변경', rows: [{ code: '001', amount: '1234' }], settings });
+    const table = state.tables[0]; table.fire('tableBuilt');
+    const update = vi.spyOn(table, 'updateColumnDefinition');
+    handle.setSettings({ ...settings, dictionary: { ...settings.dictionary, keys: { ...settings.dictionary.keys, code: '계약번호' } } });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(update).toHaveBeenCalled(); handle.destroy();
+  });
+  it('redraws cells when a column format is applied from the header menu', async () => {
+    const parent = new FakeElement(), onColumnFormat = vi.fn();
+    const handle = renderGrid(parent as unknown as HTMLElement, { label: '열 서식', rows: [{ code: '001', amount: '1234.5' }], settings, onColumnFormat });
+    const table = state.tables[0]; table.fire('tableBuilt');
+    const update = vi.spyOn(table, 'updateColumnDefinition');
+    table.options.columns[1].headerContextMenu.find((entry: any) => entry.label === '열 서식').action();
+    const find = (node: FakeElement): FakeElement | undefined => node.textContent === '적용' && node.listeners.has('click') ? node : node.children.map(find).find(Boolean);
+    find(parent)!.fire('click');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(onColumnFormat).toHaveBeenCalledWith('amount', { grouping: true }); expect(update).toHaveBeenCalled();
+    expect(handle.rows()).toEqual([{ code: '001', amount: '1234.5' }]); handle.destroy();
+  });
   it('moves and hides selected columns as a group and undoes both without changing raw rows', () => {
     const parent = new FakeElement(), source = [{ code: '001', amount: '1.000000000000000001', flag: false, extra: 0 }];
     const handle = renderGrid(parent as unknown as HTMLElement, { label: '선택 열', rows: source, settings });
