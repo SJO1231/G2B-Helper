@@ -124,6 +124,18 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(update).toHaveBeenCalled(); handle.destroy();
   });
+  it('redraws cells when a column format is applied from the header menu', async () => {
+    const parent = new FakeElement(), onColumnFormat = vi.fn();
+    const handle = renderGrid(parent as unknown as HTMLElement, { label: '열 서식', rows: [{ code: '001', amount: '1234.5' }], settings, onColumnFormat });
+    const table = state.tables[0]; table.fire('tableBuilt');
+    const update = vi.spyOn(table, 'updateColumnDefinition');
+    table.options.columns[1].headerContextMenu.find((entry: any) => entry.label === '열 서식').action();
+    const find = (node: FakeElement): FakeElement | undefined => node.textContent === '적용' && node.listeners.has('click') ? node : node.children.map(find).find(Boolean);
+    find(parent)!.fire('click');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(onColumnFormat).toHaveBeenCalledWith('amount', { grouping: true }); expect(update).toHaveBeenCalled();
+    expect(handle.rows()).toEqual([{ code: '001', amount: '1234.5' }]); handle.destroy();
+  });
   it('moves and hides selected columns as a group and undoes both without changing raw rows', () => {
     const parent = new FakeElement(), source = [{ code: '001', amount: '1.000000000000000001', flag: false, extra: 0 }];
     const handle = renderGrid(parent as unknown as HTMLElement, { label: '선택 열', rows: source, settings });

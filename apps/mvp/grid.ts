@@ -442,8 +442,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
       const next: MvpColumnFormat = {};
       if (['number', 'money', 'percent'].includes(type || '')) { if (number !== undefined) next.decimals = number; next.grouping = grouping.checked; }
       if (type === 'date' || type === 'datetime') next.dateFormat = date.value as MvpColumnFormat['dateFormat'];
-      settings.columnFormats = Object.fromEntries([...Object.entries(settings.columnFormats || {}).filter(([key]) => key !== column.key), [column.key, next]]);
-      handle.setSettings(settings); options.onColumnFormat?.(column.key, next); closePanel();
+      handle.setSettings({ ...settings, columnFormats: { ...settings.columnFormats, [column.key]: next } }); options.onColumnFormat?.(column.key, next); closePanel();
     }));
   }
   function openNested(cell: CellComponent, column: GridColumn): void {
