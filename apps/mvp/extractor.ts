@@ -15,7 +15,8 @@ const conflict = (a: JsonRow, b: JsonRow): boolean => Object.keys(a).some(key =>
 
 /** Explicit defaults for the settings editor; an omitted policy retains the legacy gate. */
 export const defaultScreenRules: CaptureScreenRule[] = approvedScreenProfiles.flatMap(profile => profile.depth2.flatMap(depth2 => {
-  const depths: (string | undefined)[] = profile.stage === 'bid' ? ['01175', '01179'] : profile.stage === 'contract' ? ['01572', '01579'] : [undefined];
+  // Notice (01175) and contract (01572) management lists are excluded by default (#17); add them as screen rules when needed.
+  const depths: (string | undefined)[] = profile.stage === 'bid' ? ['01179'] : profile.stage === 'contract' ? ['01579'] : [undefined];
   return depths.map(depth3 => ({ id: [profile.stage, depth2, depth3].filter(Boolean).join('-'), stage: profile.stage, urlPattern: '*', areaCd: profile.areaCd, depth1: profile.depth1, depth2, ...(depth3 ? { depth3 } : {}) }));
 }));
 
@@ -98,7 +99,7 @@ function observe(unit: Unit, warnings: string[], capturedAt: string, screenRules
     if (Object.keys(unit.pointInfo).some(candidate => candidate.startsWith(key + '#') && stable(unit.pointInfo[candidate]) !== stable(unit.pointInfo[key]))) return reject('중복 화면 참조값이 모호하여 수집하지 않습니다.');
   }
   const depth3 = unit.pointInfo.depth3;
-  const approvedDepth3 = profile.stage === 'bid' ? ['01175', '01179'] : profile.stage === 'contract' ? ['01572', '01579'] : [];
+  const approvedDepth3 = profile.stage === 'bid' ? ['01179'] : profile.stage === 'contract' ? ['01579'] : [];
   if (present(depth3) && (!identityValue(depth3) || (screenRules === undefined && profile.stage !== 'receipt' && !approvedDepth3.includes(String(depth3))))) return reject('확인되지 않은 depth3 화면이므로 수집하지 않습니다.');
   const entries = Object.entries(unit.tables).map(([key, rows]) => ({ key, rows, kind: datasetKind(key, rows, profile.stage) }));
   const allRows = entries.flatMap(entry => entry.rows);
