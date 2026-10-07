@@ -32,6 +32,18 @@ describe('child table aggregation (user, 2026-10-07)', () => {
     expect(summarizeChildren(item({}, items([{ ctrtAmt: '', ctrtQty: '0' }])), labels).values).toMatchObject({ 합계_수량: '0', 합계_금액: null, 합계_단위: null, 품목수: 1 });
     expect(summarizeChildren(item({}), labels)).toEqual({ values: {}, itemRows: 0, otherRows: 2 });
   });
+  it('stays exact for wide integers with long fractions', () => {
+    const wide = summarizeChildren(item({}, items([{ ctrtAmt: '1234567890123456789012345', ctrtQty: '0.000000000000001' }, { ctrtAmt: '0.123456789012345', ctrtQty: '1' }])), labels).values;
+    expect(wide).toMatchObject({ 합계_금액: '1234567890123456789012345.123456789012345', 합계_수량: '1.000000000000001' });
+  });
+  it('breaks bid ties by classification number then item order, and skips names Studio would reject', () => {
+    const bid: DocumentItem = { ...item({}), stage: 'bid', children: [{ key: 'items', label: '물품', kind: 'items', rows: [
+      { bidClsfNo: '2', bidPbancItemSqno: '1', rowAmtSum: '10', dtlsPrnmNm: '둘-하나', '': '잔여', long: 'x'.repeat(50000) },
+      { bidClsfNo: '1', bidPbancItemSqno: '9', rowAmtSum: '10', dtlsPrnmNm: '하나-아홉', '': '잔여', long: 'x'.repeat(50000) } ] }] };
+    const values = summarizeChildren(bid, {}).values;
+    expect(values.대표_dtlsPrnmNm).toBe('하나-아홉');
+    expect(Object.hasOwn(values, '대표_') || Object.hasOwn(values, '대표_long')).toBe(false);
+  });
 });
 
 describe('template field matching (user, 2026-10-07)', () => {

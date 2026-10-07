@@ -3,14 +3,15 @@ import type { DocumentItem, JsonRow, ProcurementStage } from './contracts';
 
 /** Studio lite 1st-edition column-name rule (studio-lite core keyOK). Any other key makes Studio reject the whole item. */
 export const studioKey = (key: string): boolean => /^[\p{L}\p{N}_][\p{L}\p{N}_ .-]{0,79}$/u.test(key) && !key.split('.').some(part => ['__proto__', 'prototype', 'constructor'].includes(part));
-const scalar = (value: unknown): value is string | number | boolean | null => value === null || ['string', 'number', 'boolean'].includes(typeof value);
+/** Single values Studio accepts (studio-lite core checkRecords: scalar, finite, shorter than 50,000 characters). */
+const scalar = (value: unknown): value is string | number | boolean | null => value === null || typeof value === 'boolean' || typeof value === 'number' && Number.isFinite(value) || typeof value === 'string' && value.length < 50000;
 const empty = (value: unknown): boolean => value === undefined || value === null || value === '';
 
-/** Item-table keys per stage, as they appear in the G2B captures (#21). */
-export const itemKeys: Record<ProcurementStage, { amount: string; quantity: string; unit: string; order: string }> = {
-  receipt: { amount: 'ctrtDmndAmt', quantity: 'ctrtDmndQty', unit: 'qtyUntNm', order: 'ctrtDmndRcptItemSqno' },
-  bid: { amount: 'rowAmtSum', quantity: 'prchsDtlItemQty', unit: 'prchsDtlItemUntVal', order: 'bidPbancItemSqno' },
-  contract: { amount: 'ctrtAmt', quantity: 'ctrtQty', unit: 'ctrtUntVal', order: 'ctrtItemSqno' }
+/** Item-table keys per stage, as they appear in the G2B captures (#21). Order keys follow the Native item keys. */
+export const itemKeys: Record<ProcurementStage, { amount: string; quantity: string; unit: string; order: string[] }> = {
+  receipt: { amount: 'ctrtDmndAmt', quantity: 'ctrtDmndQty', unit: 'qtyUntNm', order: ['ctrtDmndRcptItemSqno'] },
+  bid: { amount: 'rowAmtSum', quantity: 'prchsDtlItemQty', unit: 'prchsDtlItemUntVal', order: ['bidClsfNo', 'bidPbancItemSqno'] },
+  contract: { amount: 'ctrtAmt', quantity: 'ctrtQty', unit: 'ctrtUntVal', order: ['ctrtItemSqno'] }
 };
 const number = (value: unknown): Decimal | undefined => {
   if (typeof value === 'number') return Number.isFinite(value) ? new Decimal(value) : undefined;
@@ -30,18 +31,26 @@ export function summarizeChildren(item: DocumentItem, labels: Record<string, str
   const rows = item.children.filter(child => child.kind === 'items').flatMap(child => child.rows);
   const otherRows = item.children.filter(child => child.kind !== 'items').reduce((count, child) => count + child.rows.length, 0);
   if (!rows.length) return { values: {}, itemRows: 0, otherRows };
-  let best: { row: JsonRow; amount: Decimal; order?: Decimal; index: number } | undefined;
+  // Item order: each order key numerically when both are numbers, otherwise as text; then row position.
+  const earlier = (a: JsonRow, ai: number, b: JsonRow, bi: number): boolean => {
+    for (const key of keys.order) {
+      const x = number(a[key]), y = number(b[key]);
+      if (x && y) { if (!x.eq(y)) return x.lt(y); continue; }
+      const sx = String(a[key] ?? ''), sy = String(b[key] ?? '');
+      if (sx !== sy) return sx < sy;
+    }
+    return ai < bi;
+  };
+  let best: { row: JsonRow; amount: Decimal; index: number } | undefined;
   rows.forEach((row, index) => {
     const amount = number(row[keys.amount]); if (!amount) return;
-    const order = number(row[keys.order]);
-    const earlier = (): boolean => order && best!.order ? order.lt(best!.order) || order.eq(best!.order) && index < best!.index : index < best!.index;
-    if (!best || amount.gt(best.amount) || amount.eq(best.amount) && earlier()) best = { row, amount, order, index };
+    if (!best || amount.gt(best.amount) || amount.eq(best.amount) && earlier(row, index, best.row, best.index)) best = { row, amount, index };
   });
   const values: JsonRow = {};
   if (best) {
     const used = new Set(Object.keys(best.row).map(key => '대표_' + key));
     for (const [key, value] of Object.entries(best.row)) {
-      if (!scalar(value)) continue;
+      if (!key || !scalar(value) || !studioKey('대표_' + key)) continue;
       values['대표_' + key] = value;
       const label = labels[key], name = '대표_' + label;
       if (label && !used.has(name) && Object.entries(best.row).filter(([other]) => labels[other] === label).length === 1) { values[name] = value; used.add(name); }
@@ -50,8 +59,10 @@ export function summarizeChildren(item: DocumentItem, labels: Record<string, str
   const sum = (key: string): string | null => {
     const parts = rows.map(row => number(row[key])), valid = parts.filter((part): part is Decimal => !!part);
     if (valid.length !== parts.length) return null;
-    // Decimal rounds results to 20 significant digits by default; size the precision so the total stays exact.
-    const Exact = Decimal.clone({ precision: Math.max(32, ...valid.map(part => part.toFixed().length)) + String(valid.length).length + 2 });
+    // Decimal rounds results to 20 significant digits by default: allow the widest integer part plus the longest
+    // fraction plus carry digits so the total stays exact.
+    const integer = Math.max(...valid.map(part => part.abs().trunc().toFixed().length)), fraction = Math.max(...valid.map(part => part.decimalPlaces()));
+    const Exact = Decimal.clone({ precision: integer + fraction + String(valid.length).length + 2 });
     return valid.reduce((total, part) => total.plus(part.toFixed()), new Exact(0)).toFixed();
   };
   values['합계_수량'] = sum(keys.quantity);
