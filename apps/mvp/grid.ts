@@ -601,7 +601,9 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
     setRowFilter: predicate => { rowFilter = predicate; whenReady(applyFilter); },
     setSettings: next => {
       const hideChanged = next.hideEmptyColumns !== settings.hideEmptyColumns || next.hideUnmappedColumns !== settings.hideUnmappedColumns;
+      const columnsChanged = (['hideEmptyColumns', 'hideUnmappedColumns', 'dictionary', 'columnTypes', 'columnFormats', 'columnLocks'] as const).some(key => JSON.stringify(next[key]) !== JSON.stringify(settings[key]));
       settings = structuredClone(next); root.dataset.theme = settings.theme;
+      if (!columnsChanged) return;
       whenReady(() => {
         for (const column of table.getColumns()) if (getColumn(column.getField())) widths.set(column.getField(), column.getWidth());
         if (hideChanged) visibility.clear();
