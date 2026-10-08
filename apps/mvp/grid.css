@@ -54,6 +54,9 @@
 .mvp-grid-panel-actions{display:flex;justify-content:flex-end;gap:6px}
 .mvp-grid-panel-tabs{display:flex;gap:4px;flex:none}.mvp-grid-panel-tabs button[aria-selected=true]{border-color:var(--grid-accent);color:var(--grid-accent);font-weight:600}
 .mvp-grid-panel-pane{display:flex;flex-direction:column;gap:7px;min-height:0}
+.mvp-correction-mark{font:inherit;font-size:10px;padding:0 3px;margin-right:5px;line-height:16px;border:1px solid #a86e1b;border-radius:3px;color:#85530b;background:#fff4d8;vertical-align:middle;cursor:pointer}
+.mvp-grid-corrected{border-bottom:1px dotted #a86e1b}
+[data-theme="dark"] .mvp-correction-mark{color:#ffdc96;background:#493619;border-color:#ac8848}
 .mvp-grid .mvp-grid-properties{display:block;width:100%;padding:0;border:0;background:transparent;font-size:11px;line-height:17px}.mvp-grid .tabulator-col.tabulator-row-header .tabulator-col-content{padding:3px}
 .mvp-grid-column-panel{position:fixed;top:var(--column-panel-top,64px);right:var(--column-panel-right,12px);width:min(390px,calc(100vw - 24px));max-height:calc(100dvh - var(--column-panel-top,64px) - 12px);display:flex;flex-direction:column;overflow:hidden}
 .mvp-grid-column-panel .mvp-grid-panel-heading{flex:none}

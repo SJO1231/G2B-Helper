@@ -62,6 +62,7 @@ class FakeElement {
   checked = false; indeterminate = false; placeholder = ''; title = ''; parent?: FakeElement;
   classList = { add: vi.fn(), remove: vi.fn(), toggle: vi.fn() };
   append(...nodes: FakeElement[]) { for (const node of nodes) { node.parent = this; this.children.push(node); } }
+  prepend(...nodes: FakeElement[]) { for (const node of nodes) node.parent = this; this.children.unshift(...nodes); }
   replaceChildren(...nodes: FakeElement[]) { this.children = []; this.append(...nodes); }
   setAttribute(name: string, value: string) { this.attrs[name] = value; }
   addEventListener(name: string, listener: Function) { this.listeners.set(name, [...this.listeners.get(name) || [], listener]); }
@@ -296,6 +297,16 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     expect(table.filter(table.data[0])).toBe(false);
     handle.clearColumnFilters();
     expect(table.filter(table.data[0])).toBe(true); expect(table.filter(table.data[1])).toBe(false); handle.destroy();
+  });
+  it('marks corrected cells with a badge and a 정정값 확인 menu that call back with the row and key (#36)', () => {
+    const onCorrection = vi.fn(), handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '정정', rows: [{ code: '001', amount: '5' }], settings, correction: (index, key) => index === 0 && key === 'amount' ? { source: '4', value: '5' } : undefined, onCorrection });
+    const table = state.tables[0]; table.fire('tableBuilt');
+    const cell = table.getRows()[0].getCell('f1'), span = table.options.columns[1].formatter(cell);
+    expect(span.children[0].textContent).toBe('정정'); expect(span.title).toContain('최근 수집값: 4');
+    span.children[0].fire('click'); expect(onCorrection).toHaveBeenLastCalledWith(0, 'amount');
+    expect(table.options.columns[1].contextMenu({}, cell).map((entry: any) => entry.label)).toContain('정정값 확인');
+    expect(table.options.columns[0].formatter(table.getRows()[0].getCell('f0')).children).toHaveLength(0);
+    handle.destroy();
   });
   it('renders representative item names and right-aligned money while nested details keep the full raw data', () => {
     const onNested = vi.fn(), source = [{ items: [{ dtlsPrnmNm: '합성 품명', code: '0001', quantity: 0, flag: false }, { itemCfnm: '다른 품명' }], amount: '1.000000000000000001' }];
