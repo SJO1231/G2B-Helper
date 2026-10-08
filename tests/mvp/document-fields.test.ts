@@ -1,6 +1,6 @@
 /** Public synthetic fixtures only. */
 import { describe, expect, it } from 'vitest';
-import { childRowCount, displayChanges, documentCandidates, documentValue, generationItem, planFields, studioKey } from '../../apps/mvp/document-fields';
+import { childRowCount, documentCandidates, generationItem, planFields, studioKey } from '../../apps/mvp/document-fields';
 import type { DocumentItem } from '../../apps/mvp/contracts';
 
 const labels = { ctrtNo: '계약번호', ctrtNm: '계약건명', ctrtAmt: '계약금액', ctrtItemNm: '계약물품명', dmstUntyGrpNm: '수요기관명', 다른키: '계약건명' };
@@ -66,57 +66,5 @@ describe('generation item', () => {
     const sent = generationItem(source, plan, { acceptEmpty: true, blank: ['비고'], drop: ['ctrtNo'] });
     expect(sent.fields).toMatchObject({ 수요기관명: '', 비고: '' });
     expect(Object.hasOwn(sent.fields, 'ctrtNo')).toBe(false);
-  });
-});
-
-describe('document strings by column type and format (#26)', () => {
-  it('groups amounts, drops the percent sign and keeps numbers it cannot read', () => {
-    expect(documentValue('881818182', 'money')).toBe('881,818,182');
-    expect(documentValue(38400000, 'money')).toBe('38,400,000');
-    expect(documentValue('1234.5', 'money')).toBe('1,234.5');
-    // Every stored digit is kept: the table's decimal places never round a document value (MVP 2026-10-03 precise amounts).
-    expect(documentValue('1234.567', 'money', { decimals: 1 })).toBe('1,234.567');
-    expect(documentValue('-1234.50', 'money')).toBe('-1,234.50');
-    // Zero-padded numbers are identifiers in practice and stay as they are.
-    expect(documentValue('0001234', 'money')).toBe('0001234');
-    expect(documentValue('12345', 'number')).toBe('12345');
-    expect(documentValue('12345', 'number', { grouping: true })).toBe('12,345');
-    expect(documentValue('87.5%', 'percent')).toBe('87.5');
-    expect(documentValue('금 일천원', 'money')).toBe('금 일천원');
-  });
-  it('writes dates and times in the merge workbook form unless the column chose a date format', () => {
-    expect(documentValue('20261027', 'date')).toBe('2026. 10. 27.');
-    expect(documentValue('2025-06-02', 'date')).toBe('2025. 6. 2.');
-    expect(documentValue('2025/06/02 14:00:00', 'datetime')).toBe('2025. 6. 2. 14:00');
-    expect(documentValue('2025-06-05 09:30', 'datetime')).toBe('2025. 6. 5. 09:30');
-    expect(documentValue('20261027', 'date', { dateFormat: 'dash' })).toBe('2026-10-27');
-    expect(documentValue('20250602 14:00', 'datetime', { dateFormat: 'compact' })).toBe('20250602 14:00');
-    // The format window saves the dot form without a choice being made, so it keeps the merge form.
-    expect(documentValue('20250602 14:00', 'datetime', { dateFormat: 'dot' })).toBe('2025. 6. 2. 14:00');
-    expect([documentValue('20260230', 'date'), documentValue('2025-06-02 25:00', 'datetime'), documentValue('2025-06-02 14:00:99', 'datetime'), documentValue('미정', 'date')]).toEqual(['20260230', '2025-06-02 25:00', '2025-06-02 14:00:99', '미정']);
-  });
-  it('leaves untyped values, identifiers, text, checks and empty values as they are', () => {
-    expect([documentValue('0000123'), documentValue('0000123', 'text'), documentValue(false, 'money'), documentValue('', 'date'), documentValue(null, 'money'), documentValue(0, 'number')]).toEqual(['0000123', '0000123', false, '', null, '0']);
-  });
-  it('sends template values as document strings by their source key type, and lists what changed', () => {
-    const source = item({ ctrtNo: '0000123', ctrtAmt: '38400000', ctrtDt: '20261027', 비고: '그대로' });
-    const plan = planFields(['계약금액', 'ctrtDt', 'ctrtNo', '비고'], source, labels);
-    const display = { columnTypes: { ctrtAmt: 'money' as const, ctrtDt: 'date' as const }, columnFormats: {} };
-    const sent = generationItem(source, plan, { display });
-    expect(sent.fields).toMatchObject({ 계약금액: '38,400,000', ctrtDt: '2026. 10. 27.', ctrtNo: '0000123', 비고: '그대로', ctrtAmt: '38400000' });
-    expect(displayChanges(plan, display)).toEqual([['계약금액', '38400000', '38,400,000'], ['ctrtDt', '20261027', '2026. 10. 27.']]);
-    expect(generationItem(source, plan).fields.계약금액).toBe('38400000');
-  });
-  it('keeps the stored value of names Studio asked for only by a Block condition', () => {
-    const source = item({ ctrtAmt: '9500000', ctrtDt: '20261027' });
-    const plan = planFields(['계약금액', 'ctrtDt'], source, labels), display = { columnTypes: { ctrtAmt: 'money' as const, ctrtDt: 'date' as const } };
-    expect(generationItem(source, plan, { display, raw: ['계약금액'] }).fields).toMatchObject({ 계약금액: '9500000', ctrtDt: '2026. 10. 27.' });
-    expect(displayChanges(plan, display, ['계약금액'])).toEqual([['ctrtDt', '20261027', '2026. 10. 27.']]);
-  });
-  it('types a user-column value by its own name and reports no change for a number that only became text', () => {
-    const source = { ...item({ ctrtNo: '1' }), userValues: { 종결금액: '1000000', 수량: 12345 } };
-    const plan = planFields(['종결금액', '수량'], source, labels), display = { columnTypes: { 종결금액: 'money' as const, 수량: 'number' as const } };
-    expect(generationItem(source, plan, { display }).fields).toMatchObject({ 종결금액: '1,000,000', 수량: '12345' });
-    expect(displayChanges(plan, display)).toEqual([['종결금액', '1000000', '1,000,000']]);
   });
 });

@@ -4,7 +4,7 @@ import { collectionScreen, defaultScreenRules, extractCapture, extractionViews, 
 import { rpc, captureCurrentPage, runLauncher } from './bridge';
 import { RecordView } from './record-view';
 import { collectorBridge, documentItems, screenDocumentItems } from './integrations';
-import { childRowCount, displayChanges, documentCandidates, generationItem, planFields } from './document-fields';
+import { childRowCount, documentCandidates, generationItem, planFields } from './document-fields';
 import { extractionSources, recordSources, type OutputSource } from './document-sources';
 import type { DocumentItem, DocumentProfile, DocumentRequest, DocumentResult } from './contracts';
 import { columnTypeLabels, type MvpColumnType, type CollectionDecision, type CollectionPreview, type ExtractionResult, type ExtractionView, type GridRendererHandle, type GridViewState, type JsonRow, type MvpSettings, type ProcurementObservation, type ProcurementRecord, type ProcurementStage } from './contracts';
@@ -56,7 +56,8 @@ shell.append(title,toolbar,tabs,area,status);root.append(shell);
 function download(value:string,name:string,type='application/json'){const url=URL.createObjectURL(new Blob([value],{type}));const a=node('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function dialog(label:string){const d=node('dialog',undefined,'dialog');const head=node('header',undefined,'titlebar');head.append(node('strong',label),node('span',undefined,'spacer'),iconButton('close','닫기',()=>d.close()));const body=node('div',undefined,'dialog-body');d.append(head,body);document.body.append(d);d.addEventListener('close',()=>d.remove());d.showModal();return{d,head,body};}
 function rawDialog(value:unknown){const {body}=dialog('원본 JSON');const text=typeof value==='string'?value:JSON.stringify(value,null,2);body.append(button('JSON 저장',()=>download(text,'g2b-raw.json')),node('pre',text,'raw-view'));}
-function nested(label:string, rows:JsonRow[]){const {d,body}=dialog(label);const host=node('div',undefined,'grid-area');body.append(host);const grid=renderGrid(host,{label,rows,settings,onNested:(_row,key,nestedRows)=>nestedView(key,nestedRows)});d.addEventListener('close',()=>grid.destroy());}
+// A detail table opens in a modal, so it carries its own '필터 해제' (#28).
+function nested(label:string, rows:JsonRow[]){const {d,body}=dialog(label);const host=node('div',undefined,'grid-area');const reset=button('필터 해제',()=>grid.clearColumnFilters());reset.title='머리글에서 설정한 열 필터만 해제합니다.';body.append(reset,host);const grid=renderGrid(host,{label,rows,settings,onNested:(_row,key,nestedRows)=>nestedView(key,nestedRows)});d.addEventListener('close',()=>grid.destroy());}
 function nestedView(key:string,rows:JsonRow[]){nested(key,rows);}
 function saveSettings(){const snapshot=structuredClone(settings),revision=++settingsRevision;const operation=settingsQueue.catch(()=>{}).then(async()=>{try{if(native){const saved=await rpc<{settings:MvpSettings;storeVersion:number}>('mvp.settings.save',{settings:snapshot,storeVersion:settingsVersion});settingsVersion=saved.storeVersion;confirmedSettings=structuredClone(saved.settings);}else confirmedSettings=structuredClone(snapshot);if(revision===settingsRevision){settings=structuredClone(confirmedSettings);theme();}}catch(error){if(revision===settingsRevision){settings=structuredClone(confirmedSettings);theme();}throw error;}});settingsQueue=operation;return operation;}
 function autosave(){theme();void saveSettings().catch(fail);}
@@ -66,7 +67,9 @@ const importFile=input('JSON 열기','file');importFile.accept='.json,.txt';impo
 const hiddenUser=button('사용자 열 숨김',()=>{userVisible=!userVisible;handle?.setUserColumnsVisible(userVisible);hiddenUser.classList.toggle('active',!userVisible);hiddenUser.setAttribute('aria-pressed',String(!userVisible));});hiddenUser.setAttribute('aria-pressed','false');hiddenUser.title='사용자 열 표시 여부를 전환합니다.';
 const finishSelected=button('종결',()=>handle?.toggleSelectedBoolean(recordView?.completionKey||'종결'));finishSelected.hidden=true;
 finishSelected.title='선택한 계약 행의 종결 체크를 반전합니다. 변경 후 저장하세요.';
-const tabList=node('div',undefined,'tab-list'),tabActions=node('div',undefined,'tab-actions');tabActions.append(finishSelected,hiddenUser,search);tabs.append(tabList,tabActions);
+// '열 필터 해제' is named '필터 해제' and sits beside the search (user, #28); the search term is kept.
+const resetFilters=button('필터 해제',()=>handle?.clearColumnFilters());resetFilters.title='머리글에서 설정한 열 필터만 해제합니다. 전체 검색어는 유지합니다.';
+const tabList=node('div',undefined,'tab-list'),tabActions=node('div',undefined,'tab-actions');tabActions.append(finishSelected,hiddenUser,resetFilters,search);tabs.append(tabList,tabActions);
 const exports=node('div',undefined,'export-actions');exports.append(button('원본 JSON',()=>rawDialog(isDb?records.map(r=>({recordId:r.recordId,rawJson:r.rawJson})):extraction?.raw||{})),button('JSON',()=>download(JSON.stringify(exportJson(),null,2),'g2b-tables.json')),button('CSV',()=>handle?.exportCsv('g2b-table.csv')),button('Excel',()=>handle?.exportExcel('g2b-table.xlsx')),save,importFile);toolbar.append(filters,exports);
 const generateButton=button('생성',()=>generateDocuments());exports.insertBefore(generateButton,save);
 function exportJson(){if(isDb)return handle?.rows()||[];if(!extraction)return{};const tables=Object.fromEntries(extractionViews(extraction,'tables').map(v=>[v.key,temporaryBuffers.get(v.key)||v.rows]));if(settings.extractionMode==='all'){const points=extractionViews(extraction,'all').filter(v=>!Object.hasOwn(tables,v.key));return{pointInfo:points.length===1?(temporaryBuffers.get(points[0].key)||points[0].rows)[0]||{}:Object.fromEntries(points.map(v=>[v.key,(temporaryBuffers.get(v.key)||v.rows)[0]||{}])),tables};}return{tables};}
@@ -85,9 +88,11 @@ function destroyGrid(){rememberView();handle?.destroy();handle=undefined;viewKey
 function showGrid(view:ExtractionView, options:{userKeys?:string[];readonlyKeys?:string[]}={}){
  destroyGrid();activeView=view;dirty=false;save.disabled=true;save.hidden=false;viewKey=(isDb?'db:':'extract:')+view.key;const viewState=viewStates.get(viewKey);search.value=viewState?.search||'';userVisible=viewState?.userColumnsVisible!==false;hiddenUser.classList.toggle('active',!userVisible);hiddenUser.setAttribute('aria-pressed',String(!userVisible));
  handle=renderGrid(area,{label:view.label,rows:view.rows,viewState,settings:gridSettings(),userColumnKeys:options.userKeys,itemColumnKeys:isDb&&recordView?[...new Set(records.flatMap(r=>r.children.filter(c=>c.kind==='items').map(c=>recordView!.childNames.get(c.key)!).filter(Boolean)))]:undefined,readOnlyColumnKeys:options.readonlyKeys,allowRowDelete:true,onNotice:text=>message(text,true),
-  onRowsChanged:(rows,ids)=>{if(!isDb){temporaryBuffers.set(view.key,rows);temporaryOrigins.set(view.key,ids.map(id=>activeOrigins[id]));return;}dirty=true;save.disabled=!native;if(stage==='contract'&&recordView)handle?.updateDerivedValues(row=>recordView!.derive(row));},onUserColumnsChanged:(keys)=>{if(!isDb){temporaryColumns.set(view.key,keys);return;}userColumnDraft=recordView!.definitionNames(keys);dirty=true;save.disabled=!native;},onColumnRename:(key,label)=>{settings.dictionary.keys={...settings.dictionary.keys,[isDb?sourceKey(key):key]:label};autosave();},onColumnType:(key,type)=>{settings.columnTypes={...settings.columnTypes,[isDb?sourceKey(key):key]:type};autosave();},onColumnFormat:(key,format)=>{settings.columnFormats={...settings.columnFormats,[isDb?sourceKey(key):key]:format};autosave();},onColumnLock:(key,locked)=>{settings.columnLocks={...settings.columnLocks,[isDb?sourceKey(key):key]:locked};autosave();},onValueDictionary:(key,value,selection)=>valueDictionary((selection||[{key,value}]).map(entry=>({...entry,key:isDb?sourceKey(entry.key):entry.key}))),...(isDb?{onDeleteRows:(_rows:JsonRow[],indices:number[])=>{void trashRows(indices).catch(fail);}}:{}),onNested:(_row,key,rows)=>nestedView(key,rows)});
+  onRowsChanged:(rows,ids)=>{if(!isDb){temporaryBuffers.set(view.key,rows);temporaryOrigins.set(view.key,ids.map(id=>activeOrigins[id]));return;}dirty=true;save.disabled=!native;if(stage==='contract'&&recordView)handle?.updateDerivedValues(row=>recordView!.derive(row));},onUserColumnsChanged:(keys)=>{if(!isDb){temporaryColumns.set(view.key,keys);return;}userColumnDraft=recordView!.definitionNames(keys);dirty=true;save.disabled=!native;},onColumnRename:(key,label)=>{settings.dictionary.keys={...settings.dictionary.keys,[isDb?sourceKey(key):key]:label};autosave();},onColumnType:(key,type)=>{settings.columnTypes={...settings.columnTypes,[isDb?sourceKey(key):key]:type};autosave();},onColumnFormat:(key,format)=>{settings.columnFormats={...settings.columnFormats,[isDb?sourceKey(key):key]:format};autosave();},onColumnLock:(key,locked)=>{settings.columnLocks={...settings.columnLocks,[isDb?sourceKey(key):key]:locked};autosave();},onValueDictionary:(key,value,selection)=>valueDictionary((selection||[{key,value}]).map(entry=>({...entry,key:isDb?sourceKey(entry.key):entry.key}))),...(isDb?{onDeleteRows:(_rows:JsonRow[],indices:number[])=>{void trashRows(indices).catch(fail);}}:{}),onNested:(_row,key,rows)=>nestedView(key,rows),onSettings:propertySettings,tableSettings:!isDb});
  if(!userVisible)handle.setUserColumnsVisible(false);
 }
+// The 속성 panel changes the same settings as the settings window and saves them at once (user, #28).
+function propertySettings(changes:Partial<Pick<MvpSettings,'hideEmptyColumns'|'hideUnmappedColumns'|'hideEmptyTables'|'extractionMode'>>){Object.assign(settings,changes);if('hideEmptyTables'in changes||'extractionMode'in changes){void saveSettings().catch(fail);showExtraction();}else autosave();}
 function showExtraction(){if(!extraction)return;isDb=false;recordView=undefined;finishSelected.hidden=completion.hidden=true;filters.hidden=false;heading.textContent='추출';tabList.replaceChildren();const views=extractionViews(extraction,settings.extractionMode).filter(v=>!settings.hideEmptyTables||(temporaryBuffers.get(v.key)||v.rows).length>0);const show=(view:ExtractionView)=>{const rows=temporaryBuffers.get(view.key)||view.rows;activeOrigins=temporaryOrigins.get(view.key)||view.rows.map((_,index)=>index);activePristine=activeOrigins.map(origin=>origin===undefined?undefined:view.rows[origin]);dateChoices(rows);showGrid({...view,rows},{userKeys:temporaryColumns.get(view.key)});applyDates();};for(const view of views){const b=button(view.label,()=>{show(view);for(const tab of tabList.children)tab.classList.toggle('active',tab===b);});tabList.append(b);}if(views[0]){show(views[0]);tabList.firstElementChild?.classList.add('active');}else{dateChoices([]);destroyGrid();save.hidden=false;save.disabled=true;area.append(node('p','표가 없습니다.','empty'));}message(extraction.warnings.join(' · '));}
 function recordRow(record:ProcurementRecord){return recordView!.toRow(record);}
 function showRecords(){if(dirty){message('입력을 저장한 뒤 필터를 변경하세요.');return;}isDb=true;completion.hidden=finishSelected.hidden=stage!=='contract';const begin=parseDate(start.value),finish=parseDate(end.value);if(dateKey.value&&(!begin||!finish||begin>finish)){message('날짜 구간을 확인하세요.',true);return;}
@@ -218,7 +223,6 @@ async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen
  const show=(failed:DocumentResult['results'],sent:DocumentItem[])=>{
   resultArea.replaceChildren(node('p',failed.length?`${saved.length}건 저장 · ${failed.length}건 확인 필요`:`${saved.length}건 저장 완료`));
   for(const path of saved)resultArea.append(node('p',path));
-  if(formatNote)resultArea.append(node('p',formatNote));
   for(const item of failed)resultArea.append(node('p',`${sent[item.itemIndex]?.identity.join(' / ')||'자료 '+(item.itemIndex+1)}: ${item.message||'생성하지 못했습니다.'}${item.missingFields?.length?` (${item.missingFields.join(', ')})`:''}`));
   if(failed.length)again('다시 확인');else{run.textContent='완료';message(`${saved.length}건 문서 저장 완료`);}
  };
@@ -236,22 +240,17 @@ async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen
   settings.documentLinks={...settings.documentLinks,[chosenStage]:{...stageLinks,[profileId]:{...stageLinks[profileId],...add}}};await saveSettings();
  };
  const plans=()=>chosenItems.map(item=>planFields(names,item,labels(),savedLinks()));
- // Template values are sent as document strings by column type and format (#26); the first item's changes are shown.
- // Names Studio asked for only by a Block condition keep their stored value: conditions compare raw values.
- let formatNote='';const conditionNames=new Set<string>();
  const generate=async()=>{
   let drop:string[]=[];
   for(let attempt=0;attempt<2;attempt++){
    const planned=plans(),sent=chosenItems,acceptEmpty=planned.every(plan=>plan.empty.every(name=>acceptedEmpty.has(name)));
-   const changes=displayChanges(planned[0],settings,[...conditionNames]);formatNote=changes.length?'문서 형식으로 바꾼 값(첫 자료): '+changes.map(([name,before,after])=>`${name} ${rawText(before)} → ${rawText(after)}`).join(', '):'';
-   const result=await send({requestId:crypto.randomUUID(),payload:{profileId,sourceKind:kind,items:sent.map((item,index)=>generationItem(item,planned[index],{acceptEmpty,blank:[...blank],drop,display:settings,raw:[...conditionNames]}))}});
+   const result=await send({requestId:crypto.randomUUID(),payload:{profileId,sourceKind:kind,items:sent.map((item,index)=>generationItem(item,planned[index],{acceptEmpty,blank:[...blank],drop}))}});
    if(!result)return;
    const failed=settle(result,sent);
    const collisions=[...new Set(failed.filter(r=>r.code==='FIELD_COLLISION').flatMap(r=>r.conflicts||[]))];
    // A Helper key named like a Column-mapped template field: send the failed items without it once.
    if(attempt===0&&collisions.length&&!collisions.some(name=>names.includes(name))){drop=collisions;continue;}
    const missing=[...new Set(failed.filter(r=>r.code==='MISSING_FIELDS'||r.code==='MISSING_CONDITION_FIELDS').flatMap(r=>r.missingFields||[]))].filter(name=>!names.includes(name));
-   for(const name of failed.filter(r=>r.code==='MISSING_CONDITION_FIELDS').flatMap(r=>r.missingFields||[]))if(missing.includes(name))conditionNames.add(name);
    if(missing.length){names=[...names,...missing];await review();return;}
    show(failed,sent);return;
   }
@@ -371,7 +370,7 @@ async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen
    const first=probe.results[0];
    if(probe.status==='success'){if(first?.path)saved.push(first.path);chosenItems=[];resultArea.replaceChildren(node('p','서식에 채울 항목이 없어 1개 파일로 저장했습니다.'),node('p',first?.path||''));run.textContent='완료';message('문서 저장 완료');return;}
    if(!['MISSING_FIELDS','MISSING_CONDITION_FIELDS'].includes(first?.code||'')||!first?.missingFields?.length){resultArea.replaceChildren(node('p',first?.message||'서식 항목을 확인하지 못했습니다.'));again('다시 확인');return;}
-   names=first.missingFields;if(first.code==='MISSING_CONDITION_FIELDS')for(const name of names)conditionNames.add(name);await review();
+   names=first.missingFields;await review();
   }catch(error){
    resultArea.replaceChildren(node('p',error instanceof Error?error.message:String(error)));again(pending?'같은 요청 다시 시도':'다시 확인');
    // Nothing chosen yet (for example a blocked row): the selection can be changed again.
