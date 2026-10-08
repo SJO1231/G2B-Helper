@@ -4,7 +4,7 @@ import 'tabulator-tables/dist/css/tabulator.min.css';
 import './grid.css';
 import { setIcon } from './icons';
 import { columnTypeLabels, type GridRendererHandle, type GridRendererOptions, type GridViewState, type JsonRow, type MvpColumnType, type MvpColumnFormat, type MvpSettings } from './contracts';
-import { GridModel, choiceText, compareValues, editedValue, excelFormat, excelValue, exportMatrix, formatValue, isEmpty, matchesView, nestedPreview, nestedTitle, parseClipboard, rawText, valueToken, type GridBufferRow, type GridColumn, type GridView } from './grid-model';
+import { GridModel, choiceText, compareValues, editedValue, excelFormat, excelValue, exportMatrix, formatValue, isEmpty, matchesView, nestedPreview, parseClipboard, rawText, valueToken, type GridBufferRow, type GridColumn, type GridView } from './grid-model';
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -432,8 +432,8 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
       formatter: cell => {
         const value = cell.getValue(), span = element('span');
         const dictionary = Object.hasOwn(settings.dictionary.values, column.key) ? settings.dictionary.values[column.key] : undefined;
-        span.textContent = dictionary && Object.prototype.hasOwnProperty.call(dictionary, String(value)) ? dictionary[String(value)] : value !== null && typeof value === 'object' ? nestedPreview(value, options.itemColumnKeys?.includes(column.key) ? 'items' : column.key) : formatValue(value, typeOf(column), formatOf(column));
-        span.title = options.itemColumnKeys?.includes(column.key) ? nestedTitle(value, 'items', key => settings.dictionary.keys[key] || key) : rawText(value);
+        span.textContent = dictionary && Object.prototype.hasOwnProperty.call(dictionary, String(value)) ? dictionary[String(value)] : value !== null && typeof value === 'object' ? nestedPreview(value) : formatValue(value, typeOf(column), formatOf(column));
+        span.title = Array.isArray(value) ? '눌러서 표 보기' : rawText(value);
         if (value !== null && typeof value === 'object') {
           span.className = 'mvp-grid-nested'; span.setAttribute('role', 'button'); span.tabIndex = 0;
           span.setAttribute('aria-label', model.label(column, settings) + ' 상세 보기');

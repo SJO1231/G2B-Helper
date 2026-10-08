@@ -159,7 +159,32 @@ def merge_children(previous, incoming, rid, changes):
 # The representative item and total columns of #30 were withdrawn (user, 2026-10-09, #41); their stored values are removed once.
 WITHDRAWN_SUMMARY_COLUMNS = ('대표 품명', '대표 단위', '합계 수량', '합계 금액', '품목 수')
 WITHDRAWN_SUMMARY_TYPES = {'합계 금액': 'money', '합계 수량': 'number'}
-SCHEMA_VERSION = 2  # PRAGMA user_version: 1 = withdrawn summary columns removed (#41), 2 = corrections and column locks removed (#42)
+SCHEMA_VERSION = 3  # PRAGMA user_version: 1 = summary columns removed (#41), 2 = corrections and locks removed (#42), 3 = child tables named (#44)
+
+# Child tables get names instead of screen IDs (user, 2026-10-09, #44): items are '물품', these by the last part of the
+# screen ID, any other table by that last part. Attachment tables are dropped (the raw JSON keeps them), and so is every
+# bid contact table after the first (the second is always empty).
+CHILD_NAMES = {'receipt': {'gvCtrtDmndDmstPic': '수요기관', 'gvOderPlan': '발주계획'},
+               'bid': {'grdAliasDmTtl06List': '수요기관', 'grdAliasDmTtl07LeftList': '자격제한'},
+               'contract': {'grdEtpsLst': '업체'}}
+
+def named_children(stage, children):
+    named, used, contacts = [], set(), 0
+    for child in children:
+        last = child['key'].rsplit('_', 1)[-1]
+        if last == 'grdFile':
+            continue
+        if stage == 'bid' and last == 'grdAliasDmTtl06List':
+            contacts += 1
+            if contacts > 1:
+                continue
+        name = '물품' if child['kind'] == 'items' else CHILD_NAMES[stage].get(last, last)
+        unique, number = name, 2
+        while unique in used:
+            unique, number = f'{name} {number}', number + 1
+        used.add(unique)
+        named.append({**child, 'key': unique, 'label': unique})
+    return named
 
 def order_key(order):
     """Business order numbers compare as numbers when they are ASCII digits ('9' < '10'); other orders follow as text."""
@@ -202,6 +227,8 @@ class MvpGateway:
                 self.drop_summary_columns()
             if version < 2:
                 self.drop_corrections_and_locks()
+            if version < 3:
+                self.name_child_tables()
             self.db.execute('PRAGMA user_version=%d' % SCHEMA_VERSION)
             self.db.execute('COMMIT')
         except Exception:
@@ -264,6 +291,14 @@ class MvpGateway:
             settings.pop('columnLocks')
             self.db.execute('UPDATE mvp_settings SET store_version=store_version+1,payload=? WHERE singleton=1', (dumps(settings),))
 
+    def name_child_tables(self):
+        """Stored child tables take their names, and stored attachment and second bid contact tables go (#44)."""
+        for (payload,) in self.db.execute('SELECT payload FROM mvp_records').fetchall():
+            record = loads(payload)
+            children = named_children(record['stage'], record['children'])
+            if not same(children, record['children']):
+                self.save({**record, 'children': children, 'storeVersion': record['storeVersion'] + 1})
+
     def compare(self, observations):
         require(isinstance(observations, list) and 0 < len(observations) <= 20000, '수집 대상이 없거나 너무 많습니다.')
         changes, records, versions, seen, items, order_indexes = [], [], [], set(), [], {}
@@ -271,7 +306,7 @@ class MvpGateway:
         settings = loads(self.db.execute('SELECT payload FROM mvp_settings WHERE singleton=1').fetchone()[0])
         for observation in observations:
             validate_observation(observation, settings.get('screenRules'))
-            incoming = observation['fields']
+            incoming, named = observation['fields'], named_children(observation['stage'], observation['children'])
             rid = record_id(observation)
             require(rid not in seen, '한 요청에 같은 업무키가 여러 번 있습니다.', 'AMBIGUOUS')
             seen.add(rid)
@@ -288,11 +323,11 @@ class MvpGateway:
                     versions.append((earlier['recordId'], earlier['storeVersion']))
                     values, carried = carried_user_values(observation['stage'], earlier)
                     user = {**user, **values}
-                records.append({**copy.deepcopy(observation), 'recordId': rid, 'storeVersion': 1, 'userValues': user})
+                records.append({**copy.deepcopy(observation), 'children': named, 'recordId': rid, 'storeVersion': 1, 'userValues': user})
                 counts['inserted'] += 1; items.append({'recordId': rid, 'status': 'inserted', **({'carriedFrom': earlier['identity'][1]} if carried else {})}); continue
             before_changes = len(changes)
             fields = merge_fields(previous['fields'], incoming, rid, changes)
-            children = merge_children(previous['children'], observation['children'], rid, changes)
+            children = merge_children(previous['children'], named, rid, changes)
             changed = not same(fields, previous['fields']) or not same(children, previous['children'])
             status = 'changed' if len(changes) > before_changes else 'supplemented' if changed else 'identical'
             counts[status] += 1; items.append({'recordId': rid, 'status': status})

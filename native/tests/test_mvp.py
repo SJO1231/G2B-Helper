@@ -429,9 +429,9 @@ class MvpTests(unittest.TestCase):
         source = observation('contract'); source['children'] = [{'key': 'items', 'label': '물품', 'kind': 'items', 'rows': rows}, {'key': 'other', 'label': '기타', 'kind': 'other', 'rows': [{'a': 1}]}]
         self.save([source]); update = copy.deepcopy(source); update['children'] = [{'key': 'items', 'label': '물품', 'kind': 'items', 'rows': [{'ctrtItemSqno': '01', 'extra': False}]}, {'key': 'new', 'label': '새 표', 'kind': 'other', 'rows': [{'b': 2}]}]
         preview = self.call('mvp.preview', {'observations': [source_capture(update)]})['result']
-        self.assertEqual([(c['field'], c['previous'], c['incoming']) for c in preview['changes']], [('["children","items"]', 3, 1)])
+        self.assertEqual([(c['field'], c['previous'], c['incoming']) for c in preview['changes']], [('["children","물품"]', 3, 1)])
         self.save([update]); children = {child['key']: child['rows'] for child in self.records('contract')[0]['children']}
-        self.assertEqual(children, {'items': [{'ctrtItemSqno': '01', 'extra': False}], 'other': [{'a': 1}], 'new': [{'b': 2}]})  # a table the screen did not send stays
+        self.assertEqual(children, {'물품': [{'ctrtItemSqno': '01', 'extra': False}], 'other': [{'a': 1}], 'new': [{'b': 2}]})  # a table the screen did not send stays
         update['children'][0]['rows'] = []; self.save([update]); self.assertEqual(self.records('contract')[0]['children'][0]['rows'], [{'ctrtItemSqno': '01', 'extra': False}])
         filled = observation('contract', 'FILL'); filled['children'] = [{'key': 'empty', 'label': '빈 표', 'kind': 'other', 'rows': []}]
         self.save([filled]); filled['children'][0]['rows'] = [{'c': 3}]
@@ -443,6 +443,38 @@ class MvpTests(unittest.TestCase):
         self.save([source]); updated = copy.deepcopy(source); updated['children'][0]['rows'][0]['qty'] = 2
         self.save([updated])
         self.assertEqual(self.records()[0]['children'][0]['rows'], [{'ctrtDmndRcptItemSqno': '001', 'qty': 2}])
+
+    def test_child_tables_are_named_and_attachments_and_second_contacts_dropped(self):
+        # Names instead of screen IDs; attachments and every bid contact table after the first are not kept (user, 2026-10-09, #44).
+        table = lambda key, kind='other', rows=None: {'key': key, 'label': key, 'kind': kind, 'rows': rows if rows is not None else [{'a': 1}]}
+        bid = observation('bid'); bid['children'] = [table('mf_t_itemTabs1_body_wframe6_grdAliasDmTtl06List', rows=[{'deptNm': '부서', 'picNm': '이름'}, {'deptNm': '둘째', 'picNm': '둘째'}]),
+            table('mf_t_itemTabs2_body_wframe6_grdAliasDmTtl06List', rows=[]), table('mf_t_wframe7_grdAliasDmTtl07LeftList', 'qualification'),
+            table('mf_t_wframe10_grdAliasDmTtl10List', 'qualification', []), table('wq_uuid_1_grdFile'), table('mf_t_wframe1_grdAliasDmTtl01List', 'items')]
+        receipt = observation('receipt'); receipt['children'] = [table('mf_c_wfBaseInfo_gvCtrtDmndDmstPic'), table('mf_c_wfBaseInfo_gvOderPlan'), table('mf_c_wfBaseInfo_gridView3', rows=[]),
+            table('mf_c_gvDmndItem', 'items'), table('mf_c_gridViewExcel', 'items', [{'b': 2}]), table('wq_uuid_2_grdFile')]
+        contract = observation('contract'); contract['children'] = [table('mf_c_grdEtpsLst'), table('mf_c_grdSldrGrnteEtpsLst', rows=[]), table('plain')]
+        self.save([bid]); self.save([receipt]); self.save([contract])
+        names = lambda stage: [(c['key'], c['label']) for c in self.records(stage)[0]['children']]
+        self.assertEqual(names('bid'), [('수요기관', '수요기관'), ('자격제한', '자격제한'), ('grdAliasDmTtl10List', 'grdAliasDmTtl10List'), ('물품', '물품')])
+        self.assertEqual(self.records('bid')[0]['children'][0]['rows'], [{'deptNm': '부서', 'picNm': '이름'}, {'deptNm': '둘째', 'picNm': '둘째'}])
+        self.assertNotIn('deptNm', self.records('bid')[0]['fields'])
+        self.assertEqual([key for key, _ in names('receipt')], ['수요기관', '발주계획', 'gridView3', '물품', '물품 2'])
+        self.assertEqual([key for key, _ in names('contract')], ['업체', 'grdSldrGrnteEtpsLst', 'plain'])
+        self.assertIn('grdFile', self.records()[0]['rawJson'])  # the raw JSON keeps the attachment table
+        # A recollection compares the named tables: the changed item table is replaced.
+        receipt['children'][3]['rows'] = [{'a': 9}]; self.save([receipt])
+        self.assertEqual({c['key']: c['rows'] for c in self.records()[0]['children']}['물품'], [{'a': 9}])
+
+    def test_stored_child_tables_are_named_once(self):
+        self.save([observation('contract')]); record = self.records('contract')[0]
+        record['children'] = [{'key': 'mf_c_grdCtrtLis', 'label': 'mf_c_grdCtrtLis', 'kind': 'items', 'rows': [{'x': 1}]},
+                              {'key': 'wq_uuid_3_grdFile', 'label': 'wq_uuid_3_grdFile', 'kind': 'other', 'rows': [{'f': 1}]}]
+        self.gateway.save(record); self.gateway.db.execute('PRAGMA user_version=2')  # a database written before #44
+        self.gateway.close(); self.gateway = MvpGateway(self.path)
+        after = self.records('contract')[0]
+        self.assertEqual((after['children'], after['storeVersion']), ([{'key': '물품', 'label': '물품', 'kind': 'items', 'rows': [{'x': 1}]}], record['storeVersion'] + 1))
+        self.gateway.close(); self.gateway = MvpGateway(self.path)
+        self.assertEqual(self.records('contract')[0]['storeVersion'], after['storeVersion'])
 
     def test_user_completion_survives_collection(self):
         source = observation('contract'); self.save([source]); record = self.records('contract')[0]
