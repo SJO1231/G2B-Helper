@@ -343,6 +343,80 @@ class MvpTests(unittest.TestCase):
         self.assertNotIn('error', self.call('mvp.edit', {'records': [record]}))
         self.save([source]); self.assertEqual(self.records('contract')[0]['userValues']['대표 품명'], '하나')
 
+    def test_new_order_takes_user_columns_from_the_previous_order(self):
+        self.save([observation(order='00'), observation(order='01')])
+        first = {r['identity'][1]: r for r in self.records()}
+        first['00']['userValues'] = {'담당': '이전 담당'}; first['01']['userValues'] = {'담당': '최근 담당', '메모': '유지'}
+        self.assertNotIn('error', self.call('mvp.edit', {'records': [first['00'], first['01']]}))
+        new = source_capture(observation(order='02')); new['fields']['quantity'] = 9
+        new['rawJson'] = source_capture(new)['rawJson']
+        preview = self.call('mvp.preview', {'observations': [new]})['result']
+        self.assertEqual(preview['items'][0], {'recordId': record_id(new), 'status': 'inserted', 'carriedFrom': '01'})
+        self.assertNotIn('error', self.call('mvp.apply', {'observations': [new], 'token': preview['token'], 'decisions': []}))
+        records = {r['identity'][1]: r for r in self.records()}
+        self.assertEqual(records['02']['userValues'], {'담당': '최근 담당', '메모': '유지'})
+        self.assertEqual(records['02']['fields']['quantity'], 9)
+        self.assertEqual(records['01']['userValues'], {'담당': '최근 담당', '메모': '유지'})  # the previous order stays
+
+    def test_previous_order_rules_trash_defaults_and_summaries(self):
+        source = self.contract_with_items([{'ctrtItemSqno': '1', 'ctrtItemNm': '앞 차수', 'ctrtQty': '1', 'ctrtAmt': '10'}])
+        source['identity'][1] = '00'; source['fields']['ctrtChgOrd'] = '00'
+        self.save([source])
+        later = self.contract_with_items([{'ctrtItemSqno': '1', 'ctrtItemNm': '새 차수', 'ctrtQty': '2', 'ctrtAmt': '20'}])
+        later['identity'][1] = '01'; later['fields']['ctrtChgOrd'] = '01'
+        preview = self.call('mvp.preview', {'observations': [source_capture(later)]})['result']
+        self.assertNotIn('carriedFrom', preview['items'][0])  # only the contract defaults were there
+        self.save([later])
+        values = {r['identity'][1]: r['userValues'] for r in self.records('contract')}
+        self.assertEqual((values['01']['대표 품명'], values['01']['합계 금액']), ('새 차수', '20'))  # summaries are recomputed
+        self.assertEqual(self.gateway.previous_order('contract', ['TEST-001', '02'])['identity'], ['TEST-001', '01'])
+        self.assertIsNone(self.gateway.previous_order('contract', ['TEST-001', '00']))
+        latest = {r['identity'][1]: r for r in self.records('contract')}['01']
+        self.call('mvp.trash', {'records': [{'recordId': latest['recordId'], 'storeVersion': latest['storeVersion']}]})
+        self.assertEqual(self.gateway.previous_order('contract', ['TEST-001', '02'])['identity'], ['TEST-001', '00'])  # the trash is skipped
+
+    def test_previous_order_compares_numbers_as_numbers(self):
+        self.save([observation(order='9'), observation(order='10')])
+        self.assertEqual(self.gateway.previous_order('receipt', ['TEST-001', '11'])['identity'][1], '10')
+        self.assertEqual(self.gateway.previous_order('receipt', ['TEST-001', '10'])['identity'][1], '9')
+        self.assertEqual(self.gateway.previous_order('receipt', ['TEST-001', '²'])['identity'][1], '10')  # text orders follow numbers, no error
+
+    def test_new_order_without_items_keeps_the_previous_summary_and_user_edits(self):
+        source = self.contract_with_items([{'ctrtItemSqno': '1', 'ctrtItemNm': '앞 차수', 'ctrtQty': '1', 'ctrtAmt': '10'}])
+        source['identity'][1] = '00'; source['fields']['ctrtChgOrd'] = '00'
+        self.save([source]); record = self.records('contract')[0]
+        record['userValues']['대표 품명'] = '사용자 대표'
+        self.assertNotIn('error', self.call('mvp.edit', {'records': [record]}))
+        bare = observation('contract'); bare['identity'][1] = '01'; bare['fields']['ctrtChgOrd'] = '01'
+        preview = self.call('mvp.preview', {'observations': [source_capture(bare)]})['result']
+        self.assertEqual(preview['items'][0].get('carriedFrom'), '00')
+        self.save([bare])
+        values = {r['identity'][1]: r['userValues'] for r in self.records('contract')}['01']
+        self.assertEqual((values['대표 품명'], values['합계 금액'], values['품목 수']), ('사용자 대표', '10', '1'))
+        with_items = self.contract_with_items([{'ctrtItemSqno': '1', 'ctrtItemNm': '새 품목', 'ctrtQty': '3', 'ctrtAmt': '30'}])
+        with_items['identity'][1] = '02'; with_items['fields']['ctrtChgOrd'] = '02'
+        self.save([with_items])
+        values = {r['identity'][1]: r['userValues'] for r in self.records('contract')}['02']
+        self.assertEqual((values['대표 품명'], values['합계 금액']), ('사용자 대표', '30'))  # the user edit stays, automatic totals refresh
+
+    def test_carried_automatic_totals_without_new_items_are_announced(self):
+        source = self.contract_with_items([{'ctrtItemSqno': '1', 'ctrtItemNm': '앞 차수', 'ctrtQty': '1', 'ctrtAmt': '10'}])
+        source['identity'][1] = '00'; source['fields']['ctrtChgOrd'] = '00'
+        self.save([source])
+        bare = observation('contract'); bare['identity'][1] = '01'; bare['fields']['ctrtChgOrd'] = '01'
+        self.assertEqual(self.call('mvp.preview', {'observations': [source_capture(bare)]})['result']['items'][0].get('carriedFrom'), '00')
+        with_items = self.contract_with_items([{'ctrtItemSqno': '1', 'ctrtItemNm': '새 품목', 'ctrtQty': '2', 'ctrtAmt': '20'}])
+        with_items['identity'][1] = '01'; with_items['fields']['ctrtChgOrd'] = '01'
+        self.assertNotIn('carriedFrom', self.call('mvp.preview', {'observations': [source_capture(with_items)]})['result']['items'][0])
+
+    def test_previous_order_change_between_preview_and_apply_is_stale(self):
+        self.save([observation(order='00')])
+        new = source_capture(observation(order='01'))
+        preview = self.call('mvp.preview', {'observations': [new]})['result']
+        earlier = self.records()[0]; earlier['userValues'] = {'메모': '그사이 고침'}
+        self.assertNotIn('error', self.call('mvp.edit', {'records': [earlier]}))
+        self.assertEqual(self.call('mvp.apply', {'observations': [new], 'token': preview['token'], 'decisions': []})['error']['code'], 'STALE')
+
     def test_false_is_not_zero(self):
         self.save([observation()]); changed = observation(); changed['fields']['quantity'] = False
         self.assertEqual(len(self.call('mvp.preview', {'observations': [source_capture(changed)]})['result']['conflicts']), 1)

@@ -209,6 +209,22 @@ def item_summary(stage, children):
     return {'대표 품명': text(representative.get(name)), '대표 단위': text(representative.get(unit)),
             '합계 수량': total(quantity), '합계 금액': total(amount), '품목 수': str(len(rows))}
 
+SUMMARY_COLUMNS = ('대표 품명', '대표 단위', '합계 수량', '합계 금액', '품목 수')
+
+def order_key(order):
+    """Business order numbers compare as numbers when they are ASCII digits ('9' < '10'); other orders follow as text."""
+    return (0, int(order), order) if re.fullmatch(r'[0-9]+', order) else (1, 0, order)
+
+def carried_user_values(stage, earlier):
+    """
+    Every user column value of the previous order (user, 2026-10-08, #34), with its last automatic summary so new
+    items refresh only the values the user did not change. Defaults and automatic summaries alone are not announced.
+    """
+    values, automatic = copy.deepcopy(earlier['userValues']), copy.deepcopy(earlier.get('summaryValues', {}))
+    defaults = default_user_values(stage)
+    meaningful = any(not absent(value) and not (key in defaults and same(value, defaults[key])) and not (key in automatic and same(value, automatic[key])) for key, value in values.items())
+    return values, automatic, meaningful
+
 def with_item_summary(record):
     """Fill the summary user columns when empty or still holding the last automatic value; user edits stay."""
     summary = item_summary(record['stage'], record['children'])
@@ -253,12 +269,25 @@ class MvpGateway:
         self.db.execute('INSERT INTO mvp_records(record_id,stage,store_version,payload,deleted_at) VALUES(?,?,?,?,?) ON CONFLICT(record_id) DO UPDATE SET store_version=excluded.store_version,payload=excluded.payload,deleted_at=excluded.deleted_at',
                         (record['recordId'], record['stage'], record['storeVersion'], dumps(record), record.get('deletedAt')))
 
+    def order_index(self, stage):
+        """Business number -> [(order, recordId)] of the stage's records outside the trash, read once per comparison."""
+        index = {}
+        for rid, number, order in self.db.execute("SELECT record_id, json_extract(payload, '$.identity[0]'), json_extract(payload, '$.identity[1]') FROM mvp_records WHERE stage=? AND deleted_at IS NULL", (stage,)):
+            index.setdefault(number, []).append((order, rid))
+        return index
+
+    def previous_order(self, stage, identity, index=None):
+        """The latest earlier order of the same business number outside the trash, if any."""
+        orders = (self.order_index(stage) if index is None else index).get(identity[0], [])
+        earlier = [entry for entry in orders if order_key(entry[0]) < order_key(identity[1])]
+        return self.get(max(earlier, key=lambda entry: order_key(entry[0]))[1]) if earlier else None
+
     def compare(self, observations, decisions=None, edits=None):
         require(isinstance(observations, list) and 0 < len(observations) <= 20000, '수집 대상이 없거나 너무 많습니다.')
         # Values the user changed in the extraction table, one entry (or None) per observation (#24).
         require(edits is None or isinstance(edits, list) and len(edits) == len(observations), '고친 값 형식을 확인하세요.')
         decisions = decisions or {}
-        conflicts, records, versions, seen, items = [], [], [], set(), []
+        conflicts, records, versions, seen, items, order_indexes = [], [], [], set(), [], {}
         counts = {'inserted': 0, 'identical': 0, 'supplemented': 0, 'changed': 0}
         settings = loads(self.db.execute('SELECT payload FROM mvp_settings WHERE singleton=1').fetchone()[0])
         for index, observation in enumerate(observations):
@@ -277,8 +306,19 @@ class MvpGateway:
             require(previous is None or not previous.get('deletedAt'), '휴지통의 자료입니다. 먼저 복원한 뒤 수집하세요.', 'TRASHED')
             versions.append((rid, previous['storeVersion'] if previous else None))
             if previous is None:
-                records.append(with_item_summary({**copy.deepcopy(observation), 'fields': copy.deepcopy(incoming), 'recordId': rid, 'storeVersion': 1, 'userValues': default_user_values(observation['stage'])}))
-                counts['inserted'] += 1; items.append({'recordId': rid, 'status': 'inserted'}); continue
+                # A new order keeps the screen's source values and takes the user columns of the previous order, which stays (#34).
+                if observation['stage'] not in order_indexes:
+                    order_indexes[observation['stage']] = self.order_index(observation['stage'])
+                user, automatic, carried = default_user_values(observation['stage']), {}, False
+                earlier = self.previous_order(observation['stage'], observation['identity'], order_indexes[observation['stage']])
+                if earlier is not None:
+                    versions.append((earlier['recordId'], earlier['storeVersion']))
+                    values, automatic, carried = carried_user_values(observation['stage'], earlier)
+                    user = {**user, **values}
+                    # Carried automatic totals stay when the new order has no items: that is carried data too.
+                    carried = carried or (any(not absent(value) for value in automatic.values()) and item_summary(observation['stage'], observation['children']) is None)
+                records.append(with_item_summary({**copy.deepcopy(observation), 'fields': copy.deepcopy(incoming), 'recordId': rid, 'storeVersion': 1, 'userValues': user, **({'summaryValues': automatic} if automatic else {})}))
+                counts['inserted'] += 1; items.append({'recordId': rid, 'status': 'inserted', **({'carriedFrom': earlier['identity'][1]} if carried else {})}); continue
             before_conflicts = len(conflicts)
             fields = merge_fields(previous['fields'], incoming, [], rid, conflicts, decisions)
             children = merge_children(previous['children'], observation['children'], observation['stage'], rid, conflicts, decisions)
