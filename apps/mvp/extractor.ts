@@ -94,7 +94,8 @@ function datasetKind(key: string, rows: JsonRow[], stage: ProcurementStage): Nes
   return 'other';
 }
 
-function isContent(key: string): boolean { return /grdAliasDmTtl06List$/.test(key) || /^(?:content|contents)$/.test(key); }
+// The bid contact table (grdAliasDmTtl06List) is the 수요기관 child table, never merged into the main values (user, 2026-10-09, #44).
+function isContent(key: string): boolean { return /^(?:content|contents)$/.test(key); }
 
 function observe(unit: Unit, warnings: string[], capturedAt: string, screenRules?: CaptureScreenRule[]): ProcurementObservation[] {
   const prefix = '[' + unit.framePath + '] ';

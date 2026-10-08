@@ -298,11 +298,11 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     handle.clearColumnFilters();
     expect(table.filter(table.data[0])).toBe(true); expect(table.filter(table.data[1])).toBe(false); handle.destroy();
   });
-  it('renders representative item names and right-aligned money while nested details keep the full raw data', () => {
+  it('shows a child table as its row count, opens it on click and right-aligns money (#44)', () => {
     const onNested = vi.fn(), source = [{ items: [{ dtlsPrnmNm: '합성 품명', code: '0001', quantity: 0, flag: false }, { itemCfnm: '다른 품명' }], amount: '1.000000000000000001' }];
     const handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '품목', rows: source, settings, onNested });
     const table = state.tables[0]; table.fire('tableBuilt'); const cell = table.getRows()[0].getCell('f0'), preview = table.options.columns[0].formatter(cell);
-    expect(preview.textContent).toBe('합성 품명 (전체 2개 품목)'); expect(preview.title).toBe(JSON.stringify(source[0].items));
+    expect(preview.textContent).toBe('표 2줄'); expect(preview.title).toBe('눌러서 표 보기');
     preview.fire('click'); expect(onNested).toHaveBeenCalledWith(source[0], 'items', source[0].items);
     expect(table.options.columns[1].hozAlign).toBe('right'); expect(handle.rows()).toEqual(source); handle.destroy();
   });

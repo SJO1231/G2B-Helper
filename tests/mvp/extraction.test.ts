@@ -176,6 +176,14 @@ describe('MVP parent content, items and qualifications', () => {
     expect(observation.children[1].rows).toEqual(raw.tables.goods);
   });
 
+  it('keeps the bid contact table as a child table only, even with two rows (#44)', () => {
+    const contacts = [{ CHK: false, no: 1, rowStatus: 'R', deptNm: '합성 부서', picNm: '합성 이름', eml: 'a', tlphNo: '0', dmstPicId: 'id' }, { CHK: false, no: 2, rowStatus: 'R', deptNm: '둘째', picNm: '둘째', eml: 'b', tlphNo: '1', dmstPicId: 'id2' }];
+    const result = extractCapture(capture(bid, { mf_t_itemTabs1_body_wframe6_grdAliasDmTtl06List: contacts }));
+    expect(result.observations).toHaveLength(1);
+    for (const key of ['CHK', 'no', 'rowStatus', 'deptNm', 'picNm', 'eml', 'tlphNo', 'dmstPicId']) expect(result.observations[0].fields).not.toHaveProperty(key);
+    expect(result.observations[0].children[0].rows).toEqual(contacts);
+  });
+
   it('deduplicates only an exactly equal Excel dataset in normalized children', () => {
     const rows = [{ ctrtItemSqno: '001', value: 0 }, { ctrtItemSqno: '001', value: 0 }];
     const raw = capture(contract, { grdCtrtLis: rows, grdCtrtLisExcel: rows, empty: [], emptyExcel: [] });
