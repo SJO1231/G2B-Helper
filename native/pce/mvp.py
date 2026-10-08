@@ -12,7 +12,6 @@ from .documents import COMMANDS as DOCUMENT_COMMANDS, forward as document_forwar
 
 IDENTITIES = {'receipt': ['ctrtDmndRcptNo', 'ctrtDmndRcptOrd'], 'bid': ['bidPbancNo', 'bidPbancOrd'], 'contract': ['ctrtNo', 'ctrtChgOrd']}
 SCREENS = {'receipt': ('01001', {'01114', '01117'}), 'bid': ('01173', {'01174'}), 'contract': ('01570', {'01571'})}
-ITEM_KEYS = {'receipt': ['ctrtDmndRcptItemSqno'], 'bid': ['bidClsfNo', 'bidPbancItemSqno'], 'contract': ['ctrtItemSqno']}
 WRITE = {'mvp.apply', 'mvp.edit', 'mvp.trash', 'mvp.restore', 'mvp.settings.save'}
 CONTRACT_USER_DEFAULTS = {'종결': False, '지정일': '', '종결금액': '', '선금보증기한': '', '선금보증금액': ''}
 DERIVED_USER_FIELDS = {'지체일수', '미종결금액'}
@@ -124,41 +123,37 @@ def validate_observation(observation, screen_rules=None):
     require(isinstance(observation.get('capturedAt'), str), '수집 시각이 필요합니다.')
     return observation
 
-def merge_fields(previous, incoming, prefix, rid, conflicts, decisions):
+def merge_fields(previous, incoming, rid, changes):
+    """
+    The screen's source values are applied (user, 2026-10-09, #43, replacing the field choice of M05). An empty screen
+    value never erases a stored one. A stored value replaced by a different one is listed for the notice.
+    """
     merged = copy.deepcopy(previous)
     for field, value in incoming.items():
-        if field not in merged or absent(merged[field]):
-            if not absent(value) or field not in merged:
+        if absent(value):
+            if field not in merged:
                 merged[field] = copy.deepcopy(value)
-        elif absent(value) or same(merged[field], value):
             continue
-        else:
-            path = field if not prefix else dumps([*prefix, field])
-            conflicts.append({'recordId': rid, 'field': path, 'previous': merged[field], 'incoming': value})
-            if decisions.get((rid, path), False):
-                merged[field] = copy.deepcopy(value)
+        if field in merged and not absent(merged[field]) and not same(merged[field], value):
+            changes.append({'recordId': rid, 'field': field, 'previous': copy.deepcopy(merged[field]), 'incoming': copy.deepcopy(value)})
+        merged[field] = copy.deepcopy(value)
     return merged
 
-def merge_children(previous, incoming, stage, rid, conflicts, decisions):
+def merge_children(previous, incoming, rid, changes):
+    """
+    A child table that differs is replaced as a whole by the screen's table (user, 2026-10-09, #43). An empty screen
+    table keeps the stored rows: a tab that was not opened can look empty. Tables the screen did not send stay.
+    """
     merged = copy.deepcopy(previous)
     for child in incoming:
-        old = next((c for c in merged if c['key'] == child['key']), None)
-        if old is None:
+        index = next((position for position, stored in enumerate(merged) if stored['key'] == child['key']), None)
+        if index is None:
             merged.append(copy.deepcopy(child)); continue
-        if not child['rows']:
+        if not child['rows'] or same(merged[index]['rows'], child['rows']):
             continue
-        keys = ITEM_KEYS[stage] if child['kind'] == 'items' else []
-        for row in child['rows']:
-            if keys and all(not absent(row.get(k)) for k in keys):
-                matches = [(index, candidate) for index, candidate in enumerate(old['rows']) if all(same(candidate.get(k), row[k]) for k in keys)]
-                require(len(matches) <= 1, '기존 하위 표의 물품키가 중복되어 비교할 수 없습니다.', 'AMBIGUOUS')
-                if matches:
-                    index, candidate = matches[0]
-                    old['rows'][index] = merge_fields(candidate, row, ['children', child['key'], index], rid, conflicts, decisions)
-                else:
-                    old['rows'].append(copy.deepcopy(row))
-            elif not any(same(candidate, row) for candidate in old['rows']):
-                old['rows'].append(copy.deepcopy(row))
+        if merged[index]['rows']:
+            changes.append({'recordId': rid, 'field': dumps(['children', child['key']]), 'previous': len(merged[index]['rows']), 'incoming': len(child['rows'])})
+        merged[index] = copy.deepcopy(child)
     return merged
 
 # The representative item and total columns of #30 were withdrawn (user, 2026-10-09, #41); their stored values are removed once.
@@ -269,10 +264,9 @@ class MvpGateway:
             settings.pop('columnLocks')
             self.db.execute('UPDATE mvp_settings SET store_version=store_version+1,payload=? WHERE singleton=1', (dumps(settings),))
 
-    def compare(self, observations, decisions=None):
+    def compare(self, observations):
         require(isinstance(observations, list) and 0 < len(observations) <= 20000, '수집 대상이 없거나 너무 많습니다.')
-        decisions = decisions or {}
-        conflicts, records, versions, seen, items, order_indexes = [], [], [], set(), [], {}
+        changes, records, versions, seen, items, order_indexes = [], [], [], set(), [], {}
         counts = {'inserted': 0, 'identical': 0, 'supplemented': 0, 'changed': 0}
         settings = loads(self.db.execute('SELECT payload FROM mvp_settings WHERE singleton=1').fetchone()[0])
         for observation in observations:
@@ -296,15 +290,15 @@ class MvpGateway:
                     user = {**user, **values}
                 records.append({**copy.deepcopy(observation), 'recordId': rid, 'storeVersion': 1, 'userValues': user})
                 counts['inserted'] += 1; items.append({'recordId': rid, 'status': 'inserted', **({'carriedFrom': earlier['identity'][1]} if carried else {})}); continue
-            before_conflicts = len(conflicts)
-            fields = merge_fields(previous['fields'], incoming, [], rid, conflicts, decisions)
-            children = merge_children(previous['children'], observation['children'], observation['stage'], rid, conflicts, decisions)
+            before_changes = len(changes)
+            fields = merge_fields(previous['fields'], incoming, rid, changes)
+            children = merge_children(previous['children'], observation['children'], rid, changes)
             changed = not same(fields, previous['fields']) or not same(children, previous['children'])
-            status = 'changed' if len(conflicts) > before_conflicts else 'supplemented' if changed else 'identical'
+            status = 'changed' if len(changes) > before_changes else 'supplemented' if changed else 'identical'
             counts[status] += 1; items.append({'recordId': rid, 'status': status})
             records.append({**previous, **({'fields': fields, 'children': children, 'rawJson': observation['rawJson'], 'source': observation['source'], 'capturedAt': observation['capturedAt'], 'storeVersion': previous['storeVersion'] + 1} if changed else {})})
         token = {'observations': observations, 'versions': versions}
-        return {'token': digest(token), 'observations': observations, 'conflicts': conflicts, 'counts': counts, 'items': items}, records
+        return {'token': digest(token), 'observations': observations, 'changes': changes, 'counts': counts, 'items': items}, records
 
     def dispatch(self, command, payload):
         if command == 'mvp.health':
@@ -335,17 +329,11 @@ class MvpGateway:
         if command == 'mvp.preview':
             return self.compare(payload.get('observations'))[0]
         if command == 'mvp.apply':
-            choices = payload.get('decisions', [])
-            require(isinstance(choices, list) and all(isinstance(c, dict) and isinstance(c.get('recordId'), str) and isinstance(c.get('field'), str) and isinstance(c.get('useIncoming'), bool) for c in choices), '충돌 선택 형식을 확인하세요.')
-            decisions = {(c['recordId'], c['field']): c['useIncoming'] for c in choices}
-            require(len(decisions) == len(choices), '중복 충돌 선택입니다.')
-            preview, records = self.compare(payload.get('observations'), decisions)
+            preview, records = self.compare(payload.get('observations'))
             require(payload.get('token') == preview['token'], '자료가 바뀌었습니다. 다시 비교하세요.', 'STALE')
-            expected = {(c['recordId'], c['field']) for c in preview['conflicts']}
-            require(set(decisions) == expected, '각 충돌에 유지/반영을 선택하세요.')
             for record in records:
                 self.save(record)
-            return {'records': records, 'counts': preview['counts']}
+            return {'records': records, 'counts': preview['counts'], 'changes': preview['changes'], 'items': preview['items']}
         if command == 'mvp.edit':
             changes = payload.get('records')
             column_change = payload.get('userColumns')

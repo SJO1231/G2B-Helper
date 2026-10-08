@@ -45,10 +45,10 @@ class MvpTests(unittest.TestCase):
         self.sequence += 1
         return self.gateway.handle({'protocolVersion': 1, 'requestId': request_id or str(self.sequence), 'command': command, 'payload': payload or {}})
 
-    def save(self, observations, decisions=None, request_id=None):
+    def save(self, observations, request_id=None):
         observations = [source_capture(value) for value in observations]
         preview = self.call('mvp.preview', {'observations': observations})['result']
-        result = self.call('mvp.apply', {'observations': observations, 'token': preview['token'], 'decisions': decisions or []}, request_id)
+        result = self.call('mvp.apply', {'observations': observations, 'token': preview['token']}, request_id)
         return result
 
     def records(self, stage='receipt'):
@@ -76,7 +76,7 @@ class MvpTests(unittest.TestCase):
         self.assertEqual(trashed['userValues'], record['userValues'])
         self.assertEqual(self.call('mvp.edit', {'records': [trashed]})['error']['code'], 'TRASHED')
         self.assertEqual(self.call('mvp.preview', {'observations': [observation('contract')]})['error']['code'], 'TRASHED')
-        self.assertEqual(self.call('mvp.apply', {'observations': [observation('contract')], 'token': '', 'decisions': []})['error']['code'], 'TRASHED')
+        self.assertEqual(self.call('mvp.apply', {'observations': [observation('contract')], 'token': ''})['error']['code'], 'TRASHED')
         self.gateway.close(); self.gateway = MvpGateway(self.path)
         self.assertEqual(self.call('mvp.records', {'stage': 'contract', 'trashed': True})['result'], [trashed])
         restore = {'records': [{'recordId': trashed['recordId'], 'storeVersion': trashed['storeVersion']}]}
@@ -234,12 +234,15 @@ class MvpTests(unittest.TestCase):
         updated = observation(); updated['fields']['blank'] = '보완'
         self.assertEqual(self.save([updated])['result']['counts']['supplemented'], 1)
 
-    def test_conflict_only_approved_fields(self):
-        self.save([observation()]); updated = observation(); updated['fields'].update(quantity=3, unitPrice='400.01')
+    def test_collection_applies_differing_screen_values_and_lists_them(self):
+        # The screen's values are applied without a question (user, 2026-10-09, #43); the replaced cells are listed.
+        self.save([observation()]); updated = observation(); updated['fields'].update(quantity=3, unitPrice='400.01', blank='보완')
         preview = self.call('mvp.preview', {'observations': [source_capture(updated)]})['result']
-        choices = [{**c, 'useIncoming': c['field'] == 'quantity'} for c in preview['conflicts']]
-        self.assertNotIn('error', self.save([updated], choices))
-        fields = self.records()[0]['fields']; self.assertEqual(fields['quantity'], 3); self.assertEqual(fields['unitPrice'], '35608652.5')
+        self.assertEqual(sorted((c['field'], c['previous'], c['incoming']) for c in preview['changes']), [('quantity', 0, 3), ('unitPrice', '35608652.5', '400.01')])
+        self.assertEqual(preview['items'][0]['status'], 'changed')
+        applied = self.call('mvp.apply', {'observations': [source_capture(updated)], 'token': preview['token']})['result']
+        self.assertEqual(applied['changes'], preview['changes'])
+        fields = self.records()[0]['fields']; self.assertEqual((fields['quantity'], fields['unitPrice'], fields['blank']), (3, '400.01', '보완'))
 
     def test_preview_reports_each_item_status(self):
         self.save([observation(number='A'), observation(number='B'), observation(number='C')])
@@ -299,7 +302,7 @@ class MvpTests(unittest.TestCase):
         new['rawJson'] = source_capture(new)['rawJson']
         preview = self.call('mvp.preview', {'observations': [new]})['result']
         self.assertEqual(preview['items'][0], {'recordId': record_id(new), 'status': 'inserted', 'carriedFrom': '01'})
-        self.assertNotIn('error', self.call('mvp.apply', {'observations': [new], 'token': preview['token'], 'decisions': []}))
+        self.assertNotIn('error', self.call('mvp.apply', {'observations': [new], 'token': preview['token']}))
         records = {r['identity'][1]: r for r in self.records()}
         self.assertEqual(records['02']['userValues'], {'담당': '최근 담당', '메모': '유지'})
         self.assertEqual(records['02']['fields']['quantity'], 9)
@@ -348,7 +351,7 @@ class MvpTests(unittest.TestCase):
         preview = self.call('mvp.preview', {'observations': [new]})['result']
         earlier = self.records()[0]; earlier['userValues'] = {'메모': '그사이 고침'}
         self.assertNotIn('error', self.call('mvp.edit', {'records': [earlier]}))
-        self.assertEqual(self.call('mvp.apply', {'observations': [new], 'token': preview['token'], 'decisions': []})['error']['code'], 'STALE')
+        self.assertEqual(self.call('mvp.apply', {'observations': [new], 'token': preview['token']})['error']['code'], 'STALE')
 
     def test_withdrawn_corrections_and_locks_are_removed_once(self):
         self.save([observation(number='A'), observation(number='B'), observation(number='C')])
@@ -377,13 +380,13 @@ class MvpTests(unittest.TestCase):
 
     def test_new_records_keep_no_correction_copies(self):
         self.save([observation()]); changed = observation(); changed['fields']['unitPrice'] = '1'
-        self.save([changed], [{'recordId': record_id(changed), 'field': 'unitPrice', 'useIncoming': True}])
+        self.save([changed])
         record = self.records()[0]
         self.assertEqual(record['fields']['unitPrice'], '1'); self.assertFalse({'sourceFields', 'overrides'} & set(record))
 
     def test_false_is_not_zero(self):
         self.save([observation()]); changed = observation(); changed['fields']['quantity'] = False
-        self.assertEqual(len(self.call('mvp.preview', {'observations': [source_capture(changed)]})['result']['conflicts']), 1)
+        self.assertEqual(len(self.call('mvp.preview', {'observations': [source_capture(changed)]})['result']['changes']), 1)
 
     def test_stale_comparison_rejected(self):
         source = observation(); self.save([source]); updated = observation(); updated['fields']['blank'] = '보완'
@@ -391,7 +394,7 @@ class MvpTests(unittest.TestCase):
         preview = self.call('mvp.preview', {'observations': [updated]})['result']
         record = self.records()[0]; record['userValues']['메모'] = '다른 창'
         self.call('mvp.edit', {'records': [record]})
-        result = self.call('mvp.apply', {'observations': [updated], 'token': preview['token'], 'decisions': []})
+        result = self.call('mvp.apply', {'observations': [updated], 'token': preview['token']})
         self.assertEqual(result['error']['code'], 'STALE')
 
     def test_different_orders_and_stages(self):
@@ -400,7 +403,7 @@ class MvpTests(unittest.TestCase):
 
     def test_validation_rolls_back_entire_batch(self):
         invalid = observation(number='INVALID'); invalid['source']['url'] = 'https://g2b.go.kr.evil.example/'
-        self.assertIn('error', self.save([observation(), invalid]) if False else self.call('mvp.apply', {'observations': [observation(), invalid], 'token': '', 'decisions': []}))
+        self.assertIn('error', self.save([observation(), invalid]) if False else self.call('mvp.apply', {'observations': [observation(), invalid], 'token': ''}))
         self.assertEqual(self.records(), [])
 
     def test_edit_failure_rolls_back_first_row(self):
@@ -411,7 +414,7 @@ class MvpTests(unittest.TestCase):
 
     def test_request_replay_once_and_changed_id_rejected(self):
         source = observation(); preview = self.call('mvp.preview', {'observations': [source]})['result']
-        payload = {'observations': [source], 'token': preview['token'], 'decisions': []}
+        payload = {'observations': [source], 'token': preview['token']}
         first = self.call('mvp.apply', payload, 'retry'); second = self.call('mvp.apply', payload, 'retry')
         self.assertEqual(first, second); self.assertEqual(self.records()[0]['storeVersion'], 1)
         payload['token'] = 'changed'; self.assertEqual(self.call('mvp.apply', payload, 'retry')['error']['code'], 'REQUEST_ID')
@@ -420,19 +423,26 @@ class MvpTests(unittest.TestCase):
         self.save([observation()]); self.gateway.close(); self.gateway = MvpGateway(self.path)
         self.assertEqual(self.records()[0]['identity'], ['TEST-001', '01'])
 
-    def test_children_partial_merge_no_delete(self):
-        source = observation('contract'); source['children'] = [{'key': 'items', 'label': '물품', 'kind': 'items', 'rows': [{'ctrtItemSqno': '01', 'price': '35608652.5'}, {'ctrtItemSqno': '02', 'price': '0'}, {'ctrtItemSqno': '03', 'price': '2.5'}]}]
-        self.save([source]); update = copy.deepcopy(source); update['children'][0]['rows'] = [{'ctrtItemSqno': '01', 'extra': False}]
-        self.save([update]); child = self.records('contract')[0]['children'][0]
-        self.assertEqual(len(child['rows']), 3); self.assertEqual(child['rows'][0]['price'], '35608652.5'); self.assertIs(child['rows'][0]['extra'], False)
-        update['children'][0]['rows'] = []; self.save([update]); self.assertEqual(len(self.records('contract')[0]['children'][0]['rows']), 3)
+    def test_child_table_is_replaced_and_an_empty_screen_table_keeps_rows(self):
+        # A differing child table is replaced as a whole; an empty screen table keeps the stored rows (user, 2026-10-09, #43).
+        rows = [{'ctrtItemSqno': '01', 'price': '35608652.5'}, {'ctrtItemSqno': '02', 'price': '0'}, {'ctrtItemSqno': '03', 'price': '2.5'}]
+        source = observation('contract'); source['children'] = [{'key': 'items', 'label': '물품', 'kind': 'items', 'rows': rows}, {'key': 'other', 'label': '기타', 'kind': 'other', 'rows': [{'a': 1}]}]
+        self.save([source]); update = copy.deepcopy(source); update['children'] = [{'key': 'items', 'label': '물품', 'kind': 'items', 'rows': [{'ctrtItemSqno': '01', 'extra': False}]}, {'key': 'new', 'label': '새 표', 'kind': 'other', 'rows': [{'b': 2}]}]
+        preview = self.call('mvp.preview', {'observations': [source_capture(update)]})['result']
+        self.assertEqual([(c['field'], c['previous'], c['incoming']) for c in preview['changes']], [('["children","items"]', 3, 1)])
+        self.save([update]); children = {child['key']: child['rows'] for child in self.records('contract')[0]['children']}
+        self.assertEqual(children, {'items': [{'ctrtItemSqno': '01', 'extra': False}], 'other': [{'a': 1}], 'new': [{'b': 2}]})  # a table the screen did not send stays
+        update['children'][0]['rows'] = []; self.save([update]); self.assertEqual(self.records('contract')[0]['children'][0]['rows'], [{'ctrtItemSqno': '01', 'extra': False}])
+        filled = observation('contract', 'FILL'); filled['children'] = [{'key': 'empty', 'label': '빈 표', 'kind': 'other', 'rows': []}]
+        self.save([filled]); filled['children'][0]['rows'] = [{'c': 3}]
+        preview = self.call('mvp.preview', {'observations': [source_capture(filled)]})['result']
+        self.assertEqual((preview['changes'], preview['items'][0]['status']), ([], 'supplemented'))  # filling an empty stored table is not a change
 
-    def test_nested_conflict_review(self):
+    def test_changed_child_row_replaces_the_table(self):
         source = observation('receipt'); source['children'] = [{'key': 'items', 'label': '물품', 'kind': 'items', 'rows': [{'ctrtDmndRcptItemSqno': '001', 'qty': 1}]}]
         self.save([source]); updated = copy.deepcopy(source); updated['children'][0]['rows'][0]['qty'] = 2
-        preview = self.call('mvp.preview', {'observations': [source_capture(updated)]})['result']
-        self.save([updated], [{**c, 'useIncoming': True} for c in preview['conflicts']])
-        self.assertEqual(self.records()[0]['children'][0]['rows'][0]['qty'], 2)
+        self.save([updated])
+        self.assertEqual(self.records()[0]['children'][0]['rows'], [{'ctrtDmndRcptItemSqno': '001', 'qty': 2}])
 
     def test_user_completion_survives_collection(self):
         source = observation('contract'); self.save([source]); record = self.records('contract')[0]
@@ -639,7 +649,7 @@ class MvpTests(unittest.TestCase):
         try:
             self.assertTrue(send(process, 'mvp.health', {}, 'health')['result']['connected'])
             preview = send(process, 'mvp.preview', {'observations': [source]}, 'preview')['result']
-            payload = {'observations': [source], 'token': preview['token'], 'decisions': []}
+            payload = {'observations': [source], 'token': preview['token']}
             saved = send(process, 'mvp.apply', payload, 'save')
             self.assertEqual(saved, send(process, 'mvp.apply', payload, 'save'))
             self.assertEqual(saved['result']['records'][0]['fields']['large'], source['fields']['large'])
