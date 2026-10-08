@@ -1,6 +1,5 @@
 .mvp-grid{--grid-sheet:var(--sheet,#fff);--grid-ink:var(--ink,#263238);--grid-line:var(--line,#c4ccd3);--grid-muted:var(--muted,#66717d);position:relative;display:flex;flex-direction:column;min-height:190px;height:100%;min-width:0;overflow:hidden;color:var(--grid-ink);background:var(--grid-sheet);font:12px/1.35 "Malgun Gothic","Segoe UI",sans-serif;border:1px solid var(--grid-line);--grid-control:var(--control,#eef1f4);--grid-accent:var(--accent,#2465b5)}
 .mvp-grid[data-theme=dark]{color-scheme:dark;--grid-sheet:var(--sheet,#20262d);--grid-ink:var(--ink,#e1e7ed);--grid-line:var(--line,#47515d);--grid-muted:var(--muted,#aab4bf);--grid-control:var(--control,#303841);--grid-accent:var(--accent,#78aef2)}
-.mvp-grid-toolbar{display:flex;align-items:center;gap:5px;min-height:31px;flex-wrap:wrap;padding:3px 6px;border-bottom:1px solid var(--grid-line);background:var(--grid-sheet)}
 .mvp-grid button,.mvp-grid select,.mvp-grid input,.mvp-grid textarea{font:inherit;color:inherit;box-sizing:border-box;border:1px solid var(--grid-line);border-radius:2px;background:var(--grid-sheet)}
 .mvp-grid button{padding:3px 7px;cursor:pointer;background:var(--grid-control)}
 .mvp-grid button:hover{border-color:var(--grid-accent)}
@@ -53,6 +52,9 @@
 .mvp-grid-check>span{overflow-wrap:anywhere}
 .mvp-grid-check small{display:block;font-size:10px;color:var(--grid-muted)}
 .mvp-grid-panel-actions{display:flex;justify-content:flex-end;gap:6px}
+.mvp-grid-panel-tabs{display:flex;gap:4px;flex:none}.mvp-grid-panel-tabs button[aria-selected=true]{border-color:var(--grid-accent);color:var(--grid-accent);font-weight:600}
+.mvp-grid-panel-pane{display:flex;flex-direction:column;gap:7px;min-height:0}
+.mvp-grid .mvp-grid-properties{display:block;width:100%;padding:0;border:0;background:transparent;font-size:11px;line-height:17px}.mvp-grid .tabulator-col.tabulator-row-header .tabulator-col-content{padding:3px}
 .mvp-grid-column-panel{position:fixed;top:var(--column-panel-top,64px);right:var(--column-panel-right,12px);width:min(390px,calc(100vw - 24px));max-height:calc(100dvh - var(--column-panel-top,64px) - 12px);display:flex;flex-direction:column;overflow:hidden}
 .mvp-grid-column-panel .mvp-grid-panel-heading{flex:none}
 .mvp-grid-column-panel .mvp-grid-panel-body{min-height:0;overflow:auto}
