@@ -20,13 +20,24 @@ export const defaultScreenRules: CaptureScreenRule[] = approvedScreenProfiles.fl
   return depths.map(depth3 => ({ id: [profile.stage, depth2, depth3].filter(Boolean).join('-'), stage: profile.stage, urlPattern: '*', areaCd: profile.areaCd, depth1: profile.depth1, depth2, ...(depth3 ? { depth3 } : {}) }));
 }));
 
-function ruleMatches(rule: CaptureScreenRule, unit: Unit): boolean {
+function ruleMatches(rule: CaptureScreenRule, unit: Pick<Unit, 'url' | 'pointInfo'>): boolean {
   if (!rule || !approvedScreenProfiles.some(profile => profile.stage === rule.stage) || !['urlPattern', 'areaCd', 'depth1', 'depth2'].every(key => typeof rule[key as keyof CaptureScreenRule] === 'string' && String(rule[key as keyof CaptureScreenRule]).trim())) return false;
   if (rule.depth3 !== undefined && typeof rule.depth3 !== 'string') return false;
   const pattern = rule.urlPattern;
   // A plain URL is a prefix; only * has wildcard meaning, never regular expressions.
   const urlMatches = pattern.includes('*') ? new RegExp('^' + pattern.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$', 's').test(unit.url) : unit.url.startsWith(pattern);
   return urlMatches && unit.pointInfo.areaCd === rule.areaCd && unit.pointInfo.depth1 === rule.depth1 && unit.pointInfo.depth2 === rule.depth2 && (!rule.depth3?.trim() || unit.pointInfo.depth3 === rule.depth3);
+}
+
+const approvedDepth3 = (stage: ProcurementStage): string[] => stage === 'bid' ? ['01179'] : stage === 'contract' ? ['01579'] : [];
+
+/** Whether a frame is a collection target, even when its business key could not be read (#24). */
+export function collectionScreen(source: ExtractionView['source'], screenRules?: CaptureScreenRule[]): boolean {
+  if (!source || !approvedUrl(source.url)) return false;
+  const unit = { url: source.url, pointInfo: { areaCd: source.areaCd, depth1: source.depth1, depth2: source.depth2, ...(source.depth3 === undefined ? {} : { depth3: source.depth3 }) } };
+  if (screenRules !== undefined) return new Set(screenRules.filter(rule => ruleMatches(rule, unit)).map(rule => rule.stage)).size === 1;
+  const profile = approvedScreenProfiles.find(entry => entry.depth2.some(depth => depth === source.depth2) && source.areaCd === entry.areaCd && source.depth1 === entry.depth1);
+  return !!profile && (!present(source.depth3) || profile.stage === 'receipt' || approvedDepth3(profile.stage).includes(String(source.depth3)));
 }
 
 function units(raw: unknown, sourceUrl: string | undefined, warnings: string[]): Unit[] {
@@ -99,8 +110,7 @@ function observe(unit: Unit, warnings: string[], capturedAt: string, screenRules
     if (Object.keys(unit.pointInfo).some(candidate => candidate.startsWith(key + '#') && stable(unit.pointInfo[candidate]) !== stable(unit.pointInfo[key]))) return reject('중복 화면 참조값이 모호하여 수집하지 않습니다.');
   }
   const depth3 = unit.pointInfo.depth3;
-  const approvedDepth3 = profile.stage === 'bid' ? ['01179'] : profile.stage === 'contract' ? ['01579'] : [];
-  if (present(depth3) && (!identityValue(depth3) || (screenRules === undefined && profile.stage !== 'receipt' && !approvedDepth3.includes(String(depth3))))) return reject('확인되지 않은 depth3 화면이므로 수집하지 않습니다.');
+  if (present(depth3) && (!identityValue(depth3) || (screenRules === undefined && profile.stage !== 'receipt' && !approvedDepth3(profile.stage).includes(String(depth3))))) return reject('확인되지 않은 depth3 화면이므로 수집하지 않습니다.');
   const entries = Object.entries(unit.tables).map(([key, rows]) => ({ key, rows, kind: datasetKind(key, rows, profile.stage) }));
   const allRows = entries.flatMap(entry => entry.rows);
   const pointComplete = complete(unit.pointInfo, profile);

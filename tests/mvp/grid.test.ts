@@ -313,7 +313,7 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     expect(dictionary).toHaveBeenCalledWith('flag', false);
     const padding = table.getRows()[2], menu = table.options.rowContextMenu({}, padding); expect(menu[0].disabled).toBe(true);
     table.options.rowContextMenu({}, table.getRows()[0])[0].action(); await Promise.resolve();
-    expect(handle.rows()).toEqual([{ code: '002', flag: true }]); expect(changed).toHaveBeenLastCalledWith([{ code: '002', flag: true }]); handle.destroy();
+    expect(handle.rows()).toEqual([{ code: '002', flag: true }]); expect(changed).toHaveBeenLastCalledWith([{ code: '002', flag: true }], [1]); handle.destroy();
   });
   it('delegates DB deletion using original zero-based indices after sorting without mutating the buffer', () => {
     const onDeleteRows = vi.fn(), handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: 'DB', rows: [{ code: '001' }, { code: '002' }], settings, allowRowDelete: true, onDeleteRows });
