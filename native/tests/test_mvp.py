@@ -551,6 +551,11 @@ class MvpTests(unittest.TestCase):
         for name in ('quantity', label):
             self.assertEqual(self.call('mvp.edit', {'records': [], 'userColumns': column([name], settings['storeVersion'])})['error']['code'], 'VALIDATION')
         self.assertNotIn('error', self.call('mvp.edit', {'records': [], 'userColumns': column(['메모'], settings['storeVersion'])}))
+        # Names records already hold (no saved definition) stay usable, and so do the contract defaults.
+        record = self.records()[0]; record['userValues']['checked'] = '예전 값'
+        self.gateway.save({**record, 'storeVersion': record['storeVersion'] + 1})
+        self.assertNotIn('error', self.call('mvp.edit', {'records': [], 'userColumns': column(['checked'], self.call('mvp.settings.read')['result']['storeVersion'])}))
+        settings = self.call('mvp.settings.read')['result']
         # A name defined before this rule stays usable; only new names are checked.
         current = self.call('mvp.settings.read')['result']; current['settings']['userColumns'] = {'receipt': ['확인 열', 'quantity']}
         self.assertNotIn('error', self.call('mvp.settings.save', current))

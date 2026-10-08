@@ -410,7 +410,9 @@ class MvpGateway:
             if column_change is not None:
                 # New user column names may not be a source key of the stage or a label (user, 2026-10-09, #47).
                 current = loads(self.db.execute('SELECT payload FROM mvp_settings WHERE singleton=1').fetchone()[0])
-                added = [name for name in column_change['keys'] if name not in current.get('userColumns', {}).get(column_change['stage'], [])]
+                # Names already in use stay usable: saved definitions, the stage's default columns and names records already hold.
+                held = {row[0] for row in self.db.execute("SELECT DISTINCT value.key FROM mvp_records, json_each(mvp_records.payload, '$.userValues') AS value WHERE mvp_records.stage=?", (column_change['stage'],))}
+                added = [name for name in column_change['keys'] if name not in current.get('userColumns', {}).get(column_change['stage'], []) and name not in held and name not in default_user_values(column_change['stage']) and name not in DERIVED_USER_FIELDS]
                 taken = {row[0] for row in self.db.execute("SELECT DISTINCT field.key FROM mvp_records, json_each(mvp_records.payload, '$.fields') AS field WHERE mvp_records.stage=?", (column_change['stage'],))} if added else set()
                 dictionary = current.get('dictionary', {}).get('keys', {})
                 taken |= {dictionary[key] for key in taken if dictionary.get(key)}  # the labels of those keys

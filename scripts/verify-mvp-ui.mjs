@@ -272,11 +272,12 @@ try {
     await (await header('메모')).click({ button: 'right' }); await mainGrid().locator('.tabulator-menu').getByText('사용자 열 삭제', { exact: true }).click();
     await selectWithoutEditing('담당'); await page.evaluate(() => navigator.clipboard.writeText('0008\r\n')); await page.keyboard.press('Control+v'); await expect(await cell('담당')).toHaveText('0008');
   });
-  await check('sorting changes display order while persisted row buffers retain record input order', async () => {
+  await check('sorting changes display order while a selected row still maps to its own record', async () => {
     await goto('mode=db&stage=contract'); const sort = (await header('계약번호')).locator('.tabulator-col-sorter'); await sort.click(); await sort.click();
     await expect(await cell('계약번호')).toHaveText('SAMPLE-024');
-    await openRaw(); const saved = JSON.parse(await page.locator('dialog[open] .raw-view').textContent());
-    assert.equal(saved[0].recordId, 'sample-0'); assert.equal(saved[23].recordId, 'sample-23');
+    // Saving and generation map grid source indices to record IDs; the generation list shows that mapping for the selected row.
+    await (await cell('계약번호')).click(); await page.locator('.shell > .toolbar').getByRole('button', { name: '생성', exact: true }).click();
+    const listed = page.locator('dialog[open] .document-candidates'); await expect(listed).toContainText('SAMPLE-024'); await expect(listed).not.toContainText('SAMPLE-001');
     await page.locator('dialog[open] .titlebar').getByRole('button', { name: '닫기', exact: true }).click();
   });
   await check('date window +/-1 year selects full calendar year and reapplies the selected source date', async () => {

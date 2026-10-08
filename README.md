@@ -19,7 +19,7 @@ npm run build:mvp
 
 Host가 아직 없으면 먼저 `.venv`의 Python과 PyInstaller로 `./scripts/package-mvp.ps1 -BuildHost`를 실행합니다. 제품은 상주 서버를 띄우지 않고 확장이 필요할 때 Native Messaging으로 실행합니다. 기존 PCE DB를 열지 않으며 기본 저장 위치는 `%LOCALAPPDATA%/G2BHelper/mvp.sqlite3`입니다.
 
-나라장터를 열면 작은 리모컨이 표시됩니다. 확장 아이콘으로 다시 열 수 있습니다. 추출은 보기 전용 임시 표, 수집은 지정 URL·동일 프레임 화면 코드·업무번호/차수를 검사한 뒤 SQLite에 저장합니다. 수집 대상 화면의 추출 표에서는 ‘저장’이 수집입니다. 기본 추출은 `tables`만, `설정 → 표시 → 추출`에서 전체로 변경할 수 있습니다. 원본 확인(설정 → 일반 → 백업의 ‘원본 JSON’)에서는 pointInfo도 유지됩니다. 내보내기는 CSV·Excel입니다.
+나라장터를 열면 작은 리모컨이 표시됩니다. 확장 아이콘으로 다시 열 수 있습니다. 추출은 보기 전용 임시 표, 수집은 지정 URL·동일 프레임 화면 코드·업무번호/차수를 검사한 뒤 SQLite에 저장합니다. 수집 대상 화면의 추출 표에서는 ‘저장’이 수집입니다. 기본 추출은 `tables`만, `설정 → 일반 → 추출`에서 전체로 변경할 수 있습니다. 원본 확인(설정 → 일반 → 백업의 ‘원본 JSON’)에서는 pointInfo도 유지됩니다. 내보내기는 CSV·Excel입니다.
 
 JS 런처는 확장 상세 페이지의 ‘사용자 스크립트 허용’ 설정이 필요합니다. 설정에서 입력하는 단축키는 리모컨이 있는 페이지에 적용됩니다. 브라우저 전체 단축키는 확장 프로그램의 단축키 화면에서도 지정할 수 있습니다. 기본은 수집 Alt+Shift+S, 문서 연결 Alt+Shift+D입니다. 문서는 선택한 자료를 실행 중인 Studio lite의 연결 서식으로 보내 HWPX 파일을 만듭니다. 업무별 서식은 설정의 ‘문서 연결’에서 지정합니다. [Chrome userScripts 공식 설명](https://developer.chrome.com/docs/extensions/reference/api/userScripts)
 
