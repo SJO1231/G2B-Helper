@@ -529,9 +529,12 @@ class MvpTests(unittest.TestCase):
         self.call('mvp.trash', {'records': [{'recordId': rows['C']['recordId'], 'storeVersion': rows['C']['storeVersion']}]})
         settings = self.call('mvp.settings.read')['result']
         column = {'stage': 'receipt', 'keys': ['남김'], 'settingsStoreVersion': settings['storeVersion']}
-        for bad in (['남김'], ['종결'], ['지체일수'], '메모', [1]):
+        for bad in (['남김'], '메모', [1]):
             self.assertEqual(self.call('mvp.edit', {'records': [rows['A']], 'userColumns': {**column, 'removeValues': bad}})['error']['code'], 'VALIDATION')
         self.assertEqual(self.records()[0]['userValues'], {'메모': '지움', '남김': '둠'})  # atomic
+        contract = {'stage': 'contract', 'keys': [], 'settingsStoreVersion': settings['storeVersion']}
+        for fixed in (['종결'], ['지체일수']):
+            self.assertEqual(self.call('mvp.edit', {'records': [], 'userColumns': {**contract, 'removeValues': fixed}})['error']['code'], 'VALIDATION')
         edited = self.call('mvp.edit', {'records': [rows['A']], 'userColumns': {**column, 'removeValues': ['메모']}})['result'][0]
         self.assertEqual((edited['userValues'], edited['storeVersion']), ({'남김': '둠'}, rows['A']['storeVersion'] + 1))
         after = {r['identity'][0]: r for r in self.records()}

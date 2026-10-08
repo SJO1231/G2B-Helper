@@ -407,7 +407,8 @@ class MvpGateway:
             remove = column_change.get('removeValues', []) if column_change is not None else []
             require(isinstance(remove, list) and all(isinstance(name, str) for name in remove), '값을 지울 사용자 열을 확인하세요.')
             remove = set(remove)
-            require(not remove & set(column_change['keys'] if column_change else []) and not remove & set(CONTRACT_USER_DEFAULTS) and not remove & DERIVED_USER_FIELDS, '정의된 사용자 열이나 계약 기본 열의 값은 지울 수 없습니다.')
+            fixed = set(CONTRACT_USER_DEFAULTS) | DERIVED_USER_FIELDS if column_change and column_change['stage'] == 'contract' else set()
+            require(not remove & set(column_change['keys'] if column_change else []) and not remove & fixed, '정의된 사용자 열이나 계약 기본 열의 값은 지울 수 없습니다.')
             require(isinstance(changes, list) and (changes or column_change is not None), '저장할 행이 없습니다.')
             require(all(isinstance(c, dict) for c in changes), '수정 행이 객체여야 합니다.')
             require(len({c.get('recordId') for c in changes if isinstance(c, dict)}) == len(changes), '수정 행이 중복되었습니다.')

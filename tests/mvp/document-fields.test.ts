@@ -67,6 +67,10 @@ describe('output rule (user, 2026-10-09, #46)', () => {
     expect(sent.userValues).toEqual({ 담당: '합성 담당', 종결: false, 업종제한: '[A(1)] 업종' });
     expect([...documentCandidates(source, output).keys()]).toEqual(['ctrtNo', 'lcnsLmtYn', 'flag', '담당', '종결', '업종제한', '지체일수']);
     expect(excludedNames(['계약금액', 'deptNm', '없는 이름'], source, { ctrtAmt: '계약금액' }, output)).toEqual(['계약금액', 'deptNm']);
+    // A saved link to an excluded column is not a match either: the hint is shown instead of an empty-value question.
+    const linked = planFields(['번호', '금액'], source, {}, { 번호: 'ctrtAmt', 금액: 'missingKey' }, output);
+    expect([linked.unmatched, linked.empty]).toEqual([['번호'], ['금액']]);
+    expect(excludedNames(linked.unmatched, source, {}, output, { 번호: 'ctrtAmt' })).toEqual(['번호']);
   });
 });
 

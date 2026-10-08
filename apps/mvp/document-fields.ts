@@ -1,4 +1,5 @@
 import type { DocumentItem, JsonRow, MvpSettings } from './contracts';
+import { contractUserColumns } from './user-fields';
 
 /** Studio lite 1st-edition column-name rule (studio-lite core keyOK). Any other key makes Studio reject the whole item. */
 export const studioKey = (key: string): boolean => /^[\p{L}\p{N}_][\p{L}\p{N}_ .-]{0,79}$/u.test(key) && !key.split('.').some(part => ['__proto__', 'prototype', 'constructor'].includes(part));
@@ -23,7 +24,7 @@ export function outputColumn(key: string, kind: OutputKind, settings: Pick<MvpSe
 }
 const everything: Output = () => true;
 /** The contract's default user columns are always defined; removing one never removes its values. */
-export const contractUserColumnsGuard = (stage: string, name: string): boolean => stage === 'contract' && ['종결', '지정일', '지체일수', '종결금액', '미종결금액', '선금보증기한', '선금보증금액'].includes(name);
+export const contractUserColumnsGuard = (stage: string, name: string): boolean => stage === 'contract' && contractUserColumns.includes(name);
 const sources = (item: DocumentItem): [JsonRow, OutputKind][] => [[item.fields, 'source'], [item.userValues, 'user'], [item.computed || {}, 'computed']];
 
 /**
@@ -39,8 +40,8 @@ export function documentCandidates(item: DocumentItem, output: Output = everythi
 }
 
 /** Template names that only an output-excluded column with a value could fill: the user is told to label or include it (#46). */
-export function excludedNames(names: string[], item: DocumentItem, labels: Record<string, string>, output: Output): string[] {
-  return names.filter(name => sources(item).some(([source, kind]) => Object.entries(source).some(([key, value]) => (key === name || labels[key] === name) && !output(key, kind) && !empty(value))));
+export function excludedNames(names: string[], item: DocumentItem, labels: Record<string, string>, output: Output, links: Record<string, string> = {}): string[] {
+  return names.filter(name => sources(item).some(([source, kind]) => Object.entries(source).some(([key, value]) => (key === name || labels[key] === name || links[name] === key) && !output(key, kind) && !empty(value))));
 }
 
 export interface FieldPlan { values: Record<string, unknown>; sources: Record<string, string>; unmatched: string[]; empty: string[]; learned: Record<string, string>; }
@@ -56,7 +57,8 @@ export function planFields(names: string[], item: DocumentItem, labels: Record<s
     let source = links[name];
     const matches = [...new Set([...(candidates.has(name) ? [name] : []), ...byLabel.get(name) || []])];
     if (!source && matches.length === 1) { source = matches[0]; if (source !== name) plan.learned[name] = source; }
-    if (!source) { plan.unmatched.push(name); continue; }
+    // A saved link to an output-excluded column is not a match: the user is told instead (#46).
+    if (!source || !candidates.has(source) && sources(item).some(([values, kind]) => Object.hasOwn(values, source) && !output(source, kind))) { plan.unmatched.push(name); continue; }
     plan.sources[name] = source; plan.values[name] = candidates.get(source);
     if (empty(plan.values[name])) plan.empty.push(name);
   }

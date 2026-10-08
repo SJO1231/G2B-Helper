@@ -292,7 +292,7 @@ async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen
   for(const plan of planned)for(const name of plan.empty)if(!acceptedEmpty.has(name))emptyCount.set(name,(emptyCount.get(name)||0)+1);
   if(!unmatched.length&&!emptyCount.size){await generate();return;}
   const box=node('div',undefined,'document-review'),picks=new Map<string,HTMLSelectElement>();
-  const excluded=[...new Set(chosenItems.flatMap(item=>excludedNames(unmatched,item,labels(),output)))];
+  const excluded=[...new Set(chosenItems.flatMap(item=>excludedNames(unmatched,item,labels(),output,savedLinks())))];
   if(excluded.length)box.append(node('p',`출력 제외 열입니다. 라벨을 붙이거나 출력 제외를 푸세요: ${excluded.join(', ')}`));
   if(unmatched.length){
    box.append(node('p','서식에서 맞는 값을 찾지 못한 항목입니다. 원천 키를 고르면 이 업무·서식에 저장해 다음부터 자동으로 넣습니다.'));
