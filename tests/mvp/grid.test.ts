@@ -154,10 +154,11 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
   });
   it('opens key dictionary editing from the column list and toggles the same chooser', () => {
     const parent = new FakeElement(), rename = vi.fn(), handle = renderGrid(parent as unknown as HTMLElement, { label: '열 목록', rows: [{ code: '001' }], settings, onColumnRename: rename });
-    const table = state.tables[0]; table.fire('tableBuilt'); const root = parent.children[0], toggle = root.children[0].children[0];
-    toggle.fire('click'); expect(root.children[2].hidden).toBe(false); toggle.fire('click'); expect(root.children[2].hidden).toBe(true);
-    toggle.fire('click'); root.children[2].children[1].children[3].children[0].fire('contextmenu');
-    const body = root.children[2].children[1]; body.children[1].value = '새 번호'; body.children[2].fire('click');
+    const table = state.tables[0]; table.fire('tableBuilt'); const root = parent.children[0], toggle = table.options.rowHeader.titleFormatter();
+    expect(toggle.textContent).toBe('속성'); expect(table.options.columns[0].headerContextMenu.some((entry: any) => entry.label === '속성')).toBe(true);
+    toggle.fire('click'); expect(root.children[1].hidden).toBe(false); toggle.fire('click'); expect(root.children[1].hidden).toBe(true);
+    toggle.fire('click'); root.children[1].children[1].children[1].children[3].children[0].fire('contextmenu');
+    const body = root.children[1].children[1]; body.children[1].value = '새 번호'; body.children[2].fire('click');
     expect(rename).toHaveBeenCalledWith('code', '새 번호'); expect(handle.rows()).toEqual([{ code: '001' }]); handle.destroy();
   });
   it('passes selected real cells to batch value dictionaries while excluding padding and unrelated selections', () => {
@@ -184,7 +185,7 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     handle = renderGrid(parent as unknown as HTMLElement, { label: '실행 취소', rows: [{ amount: '100', total: '200' }], settings, readOnlyColumnKeys: ['total'], onRowsChanged: () => handle.updateDerivedValues(row => ({ total: String(Number(row.amount) * 2) })) });
     const table = state.tables[0]; table.fire('tableBuilt'); table.rangeCells = [[table.getRows()[0].getCell('f0')]];
     table.options.clipboardPasteAction([['1,234']]); expect(handle.rows()).toEqual([{ amount: '1234', total: '2468' }]);
-    const key = (value: string, shiftKey = false) => parent.children[0].fire('keydown', { target: parent.children[0].children[4], key: value, ctrlKey: true, shiftKey, preventDefault() {}, stopImmediatePropagation() {} });
+    const key = (value: string, shiftKey = false) => parent.children[0].fire('keydown', { target: parent.children[0].children[3], key: value, ctrlKey: true, shiftKey, preventDefault() {}, stopImmediatePropagation() {} });
     key('z'); expect(handle.rows()).toEqual([{ amount: '100', total: '200' }]); key('z', true); expect(handle.rows()).toEqual([{ amount: '1234', total: '2468' }]);
     handle.setSettings({ ...settings, columnLocks: { amount: true } }); key('z'); expect(handle.rows()[0].amount).toBe('1234'); handle.destroy();
   });
@@ -213,8 +214,8 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
   it('retains Unicode insertText and committed IME text without opening an editor on selection', () => {
     const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: '한글 입력', rows: [{ code: '원래 값' }], settings });
     const table = state.tables[0]; table.fire('tableBuilt'); const cell = table.getRows()[0].getCell('f0'); table.rangeCells = [[cell]];
-    const root = parent.children[0], proxy = root.children[4], target = new FakeElement(); target.className = 'tabulator-cell';
-    root.children[1].fire('click', { target, detail: 1 }); expect(cell.edit).not.toHaveBeenCalled();
+    const root = parent.children[0], proxy = root.children[3], target = new FakeElement(); target.className = 'tabulator-cell';
+    root.children[0].fire('click', { target, detail: 1 }); expect(cell.edit).not.toHaveBeenCalled();
     let input: FakeElement | undefined;
     cell.edit.mockImplementation(() => { input = table.options.columns[0].editor(cell, (run: Function) => run(), vi.fn(), vi.fn()); });
     proxy.value = '입력'; proxy.fire('input', { isComposing: false }); expect(input?.value).toBe('입력'); expect(proxy.value).toBe('');
@@ -225,7 +226,7 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
   });
   it('keeps proxy clipboard copying raw TSV and pasting atomic across locked columns', () => {
     const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: '클립보드', rows: [{ code: '00\t01', flag: false }], settings });
-    const table = state.tables[0]; table.fire('tableBuilt'); const first = table.getRows()[0], proxy = parent.children[0].children[4];
+    const table = state.tables[0]; table.fire('tableBuilt'); const first = table.getRows()[0], proxy = parent.children[0].children[3];
     table.rangeCells = [[first.getCell('f0'), first.getCell('f1')]];
     const setData = vi.fn(); proxy.fire('copy', { clipboardData: { setData }, preventDefault() {}, stopPropagation() {} }); expect(setData).toHaveBeenCalledWith('text/plain', '"00\t01"\tfalse');
     handle.setSettings({ ...settings, columnLocks: { flag: true } });
@@ -238,17 +239,17 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     const handle = renderGrid(parent as unknown as HTMLElement, { label: '알림', rows: [{ amount: 1 }], settings, onNotice });
     const table = state.tables[0]; table.fire('tableBuilt'); const cell = table.getRows()[0].getCell('f0'); table.rangeCells = [[cell]];
     table.options.clipboardPasteAction([['invalid']]); expect(onNotice).toHaveBeenLastCalledWith('숫자와 소수점을 입력하세요. 쉼표는 세 자리씩 구분하세요.');
-    const root = parent.children[0]; expect(root.children[3].hidden).toBe(true); expect(root.children[0].children.some(child => child.className === 'mvp-grid-status')).toBe(false);
+    const root = parent.children[0]; expect(root.children[2].hidden).toBe(true); expect(root.children[0].children.some(child => child.className === 'mvp-grid-status')).toBe(false);
     table.options.clipboardPasteAction([['1.000000000000000001']]); expect(onNotice).toHaveBeenLastCalledWith(''); handle.destroy();
     const fallbackParent = new FakeElement(), fallback = renderGrid(fallbackParent as unknown as HTMLElement, { label: '독립 알림', rows: [{ amount: 1 }], settings });
     const fallbackTable = state.tables[1]; fallbackTable.fire('tableBuilt'); fallbackTable.rangeCells = [[fallbackTable.getRows()[0].getCell('f0')]]; fallbackTable.options.clipboardPasteAction([['invalid']]);
-    const fallbackRoot = fallbackParent.children[0]; expect(fallbackRoot.children[3].className).toBe('mvp-grid-status');
-    expect(fallbackRoot.children[3].title).toContain('숫자'); fallback.destroy();
+    const fallbackRoot = fallbackParent.children[0]; expect(fallbackRoot.children[2].className).toBe('mvp-grid-status');
+    expect(fallbackRoot.children[2].title).toContain('숫자'); fallback.destroy();
   });
   it('uses the same visible-checkbox meaning for all, empty, unmapped and user column groups', () => {
     const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: '열 보기', rows: [{ blank: null, code: '001', unmapped: false, memo: 'user' }], userColumnKeys: ['memo'], settings: { ...settings, hideUnmappedColumns: true } });
-    const table = state.tables[0]; table.fire('tableBuilt'); parent.children[0].children[0].children[0].fire('click');
-    const panel = parent.children[0].children[2], body = panel.children[1], groups = body.children[2], list = body.children[3];
+    const table = state.tables[0]; table.fire('tableBuilt'); table.options.rowHeader.titleFormatter().fire('click');
+    const panel = parent.children[0].children[1], body = panel.children[1].children[1], groups = body.children[2], list = body.children[3];
     expect(panel.classList.add).toHaveBeenCalledWith('mvp-grid-column-panel');
     expect(groups.children).toHaveLength(4); expect(list.children).toHaveLength(4);
     expect(groups.children[0].children[0].children[0].indeterminate).toBe(true);
@@ -260,15 +261,40 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     expect(table.getColumn('f1').isVisible()).toBe(true); expect(table.getColumn('f2').isVisible()).toBe(false);
     handle.setSettings({ ...settings, theme: 'dark', hideUnmappedColumns: true }); expect(table.getColumn('f1').isVisible()).toBe(true); expect(table.getColumn('f2').isVisible()).toBe(false); handle.destroy();
   });
+  it('opens 속성 with 열 분류 and 테이블 분류 tabs that change the shared settings directly (#28)', () => {
+    const parent = new FakeElement(), onSettings = vi.fn(), handle = renderGrid(parent as unknown as HTMLElement, { label: '속성', rows: [{ code: '001' }], settings, onSettings, tableSettings: true, viewState: { search: '', combine: 'or', filters: [], columns: [], sorters: [] } });
+    const table = state.tables[0]; table.fire('tableBuilt'); expect(handle.getViewState().combine).toBe('and');
+    table.options.rowHeader.titleFormatter().fire('click');
+    const panel = parent.children[0].children[1], body = panel.children[1], [tabs, columnPane, tablePane] = body.children;
+    expect(panel.children[0].children[0].textContent).toBe('속성');
+    expect(tabs.children.map(tab => tab.textContent)).toEqual(['열 분류', '테이블 분류']); expect([columnPane.hidden, tablePane.hidden]).toEqual([false, true]);
+    expect(columnPane.children.at(-1)!.textContent).toBe('사용자 열 추가');
+    const emptyColumns = columnPane.children.find(child => child.children[1]?.textContent === '빈 열 숨김')!.children[0];
+    emptyColumns.checked = true; emptyColumns.fire('change'); expect(onSettings).toHaveBeenLastCalledWith({ hideEmptyColumns: true });
+    tabs.children[1].fire('click'); expect([columnPane.hidden, tablePane.hidden]).toEqual([true, false]); expect(tabs.children[1].attrs['aria-selected']).toBe('true');
+    const emptyTables = tablePane.children[0].children[0]; emptyTables.checked = true; emptyTables.fire('change'); expect(onSettings).toHaveBeenLastCalledWith({ hideEmptyTables: true });
+    const range = tablePane.children[1].children[1]; range.value = 'all'; range.fire('change'); expect(onSettings).toHaveBeenLastCalledWith({ extractionMode: 'all' });
+    handle.destroy();
+  });
+  it('shows table settings disabled outside extraction and adds no column settings without a handler', () => {
+    const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: 'DB', rows: [{ code: '001' }], settings, onSettings: vi.fn() });
+    const table = state.tables[0]; table.fire('tableBuilt'); table.options.rowHeader.titleFormatter().fire('click');
+    const [, columnPane, tablePane] = parent.children[0].children[1].children[1].children;
+    expect([(tablePane.children[0].children[0] as any).disabled, (tablePane.children[1].children[1] as any).disabled]).toEqual([true, true]); expect(tablePane.title).toContain('추출 화면');
+    expect(columnPane.children.some(child => child.children[1]?.textContent === '빈 열 숨김')).toBe(true); handle.destroy();
+    const plain = new FakeElement(), readOnly = renderGrid(plain as unknown as HTMLElement, { label: '상세', rows: [{ code: '001' }], settings, readOnly: true });
+    const nested = state.tables[1]; nested.fire('tableBuilt'); nested.options.rowHeader.titleFormatter().fire('click');
+    const [, pane] = plain.children[0].children[1].children[1].children;
+    expect(pane.children.some(child => child.children[1]?.textContent === '빈 열 숨김' || child.textContent === '사용자 열 추가')).toBe(false); readOnly.destroy();
+  });
   it('resets header filters while preserving the global search term and explains the boundary', () => {
     const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: '검색', rows: [{ code: '001' }, { code: '002' }], settings });
     const table = state.tables[0]; table.fire('tableBuilt'); handle.setSearch('001');
-    const toolbar = parent.children[0].children[0]; expect(toolbar.children[1].children.map(option => option.textContent)).toEqual(['모두 충족 (AND)', '하나 이상 충족 (OR)']);
     table.options.columns[0].headerContextMenu.find((entry: any) => entry.label === '열 필터').action();
-    const body = parent.children[0].children[2].children[1], choices = body.children[3];
+    const body = parent.children[0].children[1].children[1], choices = body.children[3];
     const first = choices.children[0].children[0]; first.checked = false; first.fire('change'); body.children[5].children[1].fire('click');
     expect(table.filter(table.data[0])).toBe(false);
-    const reset = toolbar.children[2]; expect(reset.textContent).toBe('열 필터 해제'); expect(reset.title).toContain('전체 검색어는 유지'); reset.fire('click');
+    handle.clearColumnFilters();
     expect(table.filter(table.data[0])).toBe(true); expect(table.filter(table.data[1])).toBe(false); handle.destroy();
   });
   it('renders representative item names and right-aligned money while nested details keep the full raw data', () => {
@@ -284,7 +310,7 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     const table = state.tables[0]; table.fire('tableBuilt');
     const cell = table.getRows()[0].getCell('f0'), target = new FakeElement(); target.className = 'tabulator-cell'; table.rangeCells = [[cell]];
     const requestFrame = vi.fn((run: Function) => run()); vi.stubGlobal('requestAnimationFrame', requestFrame);
-    parent.children[0].children[1].fire('click', { target, detail: 1 }); expect(cell.edit).not.toHaveBeenCalled();
+    parent.children[0].children[0].fire('click', { target, detail: 1 }); expect(cell.edit).not.toHaveBeenCalled();
     const key = (value: string) => parent.children[0].fire('keydown', { target, key: value, preventDefault() {}, stopImmediatePropagation() {} });
     key('F2'); expect(cell.edit).toHaveBeenCalledTimes(1);
     let input: FakeElement | undefined;
@@ -448,7 +474,7 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     const requestFrame = vi.fn(); vi.stubGlobal('requestAnimationFrame', requestFrame);
     const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: '정렬', rows: [{ code: '001' }], settings });
     const table = state.tables[0]; table.fire('tableBuilt'); table.rangeCells = [[table.getRows()[0].getCell('f0')]];
-    const host = parent.children[0].children[1]; host.fire('click', { target: new FakeElement(), detail: 1 });
+    const host = parent.children[0].children[0]; host.fire('click', { target: new FakeElement(), detail: 1 });
     expect(requestFrame).not.toHaveBeenCalled(); handle.destroy();
   });
   it('reports user-column metadata even with zero rows and never deletes readonly derived columns', async () => {
