@@ -212,15 +212,18 @@ def item_summary(stage, children):
 SUMMARY_COLUMNS = ('대표 품명', '대표 단위', '합계 수량', '합계 금액', '품목 수')
 
 def order_key(order):
-    """Business order numbers compare as numbers when they are digits ('00' < '01' < '10')."""
-    return (0, int(order), order) if order.isdigit() else (1, 0, order)
+    """Business order numbers compare as numbers when they are ASCII digits ('9' < '10'); other orders follow as text."""
+    return (0, int(order), order) if re.fullmatch(r'[0-9]+', order) else (1, 0, order)
 
 def carried_user_values(stage, earlier):
-    """User column values a new order takes from the previous order (user, 2026-10-08, #34); summaries are recomputed."""
-    values = {key: copy.deepcopy(value) for key, value in earlier['userValues'].items() if key not in SUMMARY_COLUMNS}
+    """
+    Every user column value of the previous order (user, 2026-10-08, #34), with its last automatic summary so new
+    items refresh only the values the user did not change. Defaults and automatic summaries alone are not announced.
+    """
+    values, automatic = copy.deepcopy(earlier['userValues']), copy.deepcopy(earlier.get('summaryValues', {}))
     defaults = default_user_values(stage)
-    meaningful = any(not absent(value) and not (key in defaults and same(value, defaults[key])) for key, value in values.items())
-    return values, meaningful
+    meaningful = any(not absent(value) and not (key in defaults and same(value, defaults[key])) and not (key in automatic and same(value, automatic[key])) for key, value in values.items())
+    return values, automatic, meaningful
 
 def with_item_summary(record):
     """Fill the summary user columns when empty or still holding the last automatic value; user edits stay."""
@@ -266,18 +269,25 @@ class MvpGateway:
         self.db.execute('INSERT INTO mvp_records(record_id,stage,store_version,payload,deleted_at) VALUES(?,?,?,?,?) ON CONFLICT(record_id) DO UPDATE SET store_version=excluded.store_version,payload=excluded.payload,deleted_at=excluded.deleted_at',
                         (record['recordId'], record['stage'], record['storeVersion'], dumps(record), record.get('deletedAt')))
 
-    def previous_order(self, stage, identity):
+    def order_index(self, stage):
+        """Business number -> [(order, recordId)] of the stage's records outside the trash, read once per comparison."""
+        index = {}
+        for rid, number, order in self.db.execute("SELECT record_id, json_extract(payload, '$.identity[0]'), json_extract(payload, '$.identity[1]') FROM mvp_records WHERE stage=? AND deleted_at IS NULL", (stage,)):
+            index.setdefault(number, []).append((order, rid))
+        return index
+
+    def previous_order(self, stage, identity, index=None):
         """The latest earlier order of the same business number outside the trash, if any."""
-        rows = self.db.execute("SELECT payload FROM mvp_records WHERE stage=? AND deleted_at IS NULL AND json_extract(payload, '$.identity[0]')=?", (stage, identity[0])).fetchall()
-        earlier = [record for record in (loads(row[0]) for row in rows) if order_key(record['identity'][1]) < order_key(identity[1])]
-        return max(earlier, key=lambda record: order_key(record['identity'][1]), default=None)
+        orders = (self.order_index(stage) if index is None else index).get(identity[0], [])
+        earlier = [entry for entry in orders if order_key(entry[0]) < order_key(identity[1])]
+        return self.get(max(earlier, key=lambda entry: order_key(entry[0]))[1]) if earlier else None
 
     def compare(self, observations, decisions=None, edits=None):
         require(isinstance(observations, list) and 0 < len(observations) <= 20000, '수집 대상이 없거나 너무 많습니다.')
         # Values the user changed in the extraction table, one entry (or None) per observation (#24).
         require(edits is None or isinstance(edits, list) and len(edits) == len(observations), '고친 값 형식을 확인하세요.')
         decisions = decisions or {}
-        conflicts, records, versions, seen, items = [], [], [], set(), []
+        conflicts, records, versions, seen, items, order_indexes = [], [], [], set(), [], {}
         counts = {'inserted': 0, 'identical': 0, 'supplemented': 0, 'changed': 0}
         settings = loads(self.db.execute('SELECT payload FROM mvp_settings WHERE singleton=1').fetchone()[0])
         for index, observation in enumerate(observations):
@@ -297,12 +307,15 @@ class MvpGateway:
             versions.append((rid, previous['storeVersion'] if previous else None))
             if previous is None:
                 # A new order keeps the screen's source values and takes the user columns of the previous order, which stays (#34).
-                user, carried, earlier = default_user_values(observation['stage']), False, self.previous_order(observation['stage'], observation['identity'])
+                if observation['stage'] not in order_indexes:
+                    order_indexes[observation['stage']] = self.order_index(observation['stage'])
+                user, automatic, carried = default_user_values(observation['stage']), {}, False
+                earlier = self.previous_order(observation['stage'], observation['identity'], order_indexes[observation['stage']])
                 if earlier is not None:
                     versions.append((earlier['recordId'], earlier['storeVersion']))
-                    values, carried = carried_user_values(observation['stage'], earlier)
+                    values, automatic, carried = carried_user_values(observation['stage'], earlier)
                     user = {**user, **values}
-                records.append(with_item_summary({**copy.deepcopy(observation), 'fields': copy.deepcopy(incoming), 'recordId': rid, 'storeVersion': 1, 'userValues': user}))
+                records.append(with_item_summary({**copy.deepcopy(observation), 'fields': copy.deepcopy(incoming), 'recordId': rid, 'storeVersion': 1, 'userValues': user, **({'summaryValues': automatic} if automatic else {})}))
                 counts['inserted'] += 1; items.append({'recordId': rid, 'status': 'inserted', **({'carriedFrom': earlier['identity'][1]} if carried else {})}); continue
             before_conflicts = len(conflicts)
             fields = merge_fields(previous['fields'], incoming, [], rid, conflicts, decisions)
