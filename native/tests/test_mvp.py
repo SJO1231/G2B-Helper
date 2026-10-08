@@ -409,6 +409,16 @@ class MvpTests(unittest.TestCase):
         with_items['identity'][1] = '01'; with_items['fields']['ctrtChgOrd'] = '01'
         self.assertNotIn('carriedFrom', self.call('mvp.preview', {'observations': [source_capture(with_items)]})['result']['items'][0])
 
+    def test_cleared_totals_are_not_announced_as_carried(self):
+        source = self.contract_with_items([{'ctrtItemSqno': '1', 'ctrtItemNm': '앞 차수', 'ctrtQty': '1', 'ctrtAmt': '10'}])
+        source['identity'][1] = '00'; source['fields']['ctrtChgOrd'] = '00'
+        self.save([source]); record = self.records('contract')[0]
+        for key in ('대표 품명', '대표 단위', '합계 수량', '합계 금액', '품목 수'):
+            record['userValues'][key] = ''
+        self.assertNotIn('error', self.call('mvp.edit', {'records': [record]}))
+        bare = observation('contract'); bare['identity'][1] = '01'; bare['fields']['ctrtChgOrd'] = '01'
+        self.assertNotIn('carriedFrom', self.call('mvp.preview', {'observations': [source_capture(bare)]})['result']['items'][0])
+
     def test_previous_order_change_between_preview_and_apply_is_stale(self):
         self.save([observation(order='00')])
         new = source_capture(observation(order='01'))
