@@ -329,6 +329,10 @@ class MvpGateway:
                 # A corrected cell asks only when the screen differs from 당초값; 당초값 becomes the screen value either way.
                 if field not in incoming or absent(incoming[field]) or same(incoming[field], source_fields.get(field)):
                     continue
+                if same(incoming[field], overrides[field]):
+                    # The screen now says what the user had corrected: nothing to ask, the cell is collected as is.
+                    fields[field] = copy.deepcopy(incoming[field]); overrides.pop(field)
+                    continue
                 conflicts.append({'recordId': rid, 'field': field, 'previous': copy.deepcopy(source_fields.get(field)), 'incoming': copy.deepcopy(incoming[field]), 'override': copy.deepcopy(overrides[field])})
                 fields[field] = copy.deepcopy(incoming[field])
                 if decisions.get((rid, field), False):

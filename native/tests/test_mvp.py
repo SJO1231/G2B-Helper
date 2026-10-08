@@ -459,6 +459,42 @@ class MvpTests(unittest.TestCase):
         item = self.call('mvp.preview', {'observations': [source_capture(changed)]})['result']['items'][0]
         self.assertEqual((item['status'], item['corrections']), ('supplemented', 1))
 
+    def test_correction_edge_cases(self):
+        self.corrected()
+        blank = observation(); blank['fields']['unitPrice'] = ''
+        self.assertEqual(self.call('mvp.preview', {'observations': [source_capture(blank)]})['result']['conflicts'], [])  # an empty screen value keeps both
+        same_as_correction = observation(); same_as_correction['fields']['unitPrice'] = '수기 단가'
+        preview = self.call('mvp.preview', {'observations': [source_capture(same_as_correction)]})['result']
+        self.assertEqual(preview['conflicts'], [])
+        self.save([same_as_correction])
+        record = self.records()[0]
+        self.assertEqual((record['sourceFields']['unitPrice'], record['overrides'], record['fields']['unitPrice']), ('수기 단가', {}, '수기 단가'))
+        changed = observation(); changed['fields']['unitPrice'] = '1'
+        record['fields']['unitPrice'] = '다시 수기'; self.call('mvp.edit', {'records': [record]})
+        source = source_capture(changed); preview = self.call('mvp.preview', {'observations': [source]})['result']
+        self.assertEqual(self.call('mvp.apply', {'observations': [source], 'token': preview['token'], 'decisions': []})['error']['code'], 'VALIDATION')  # the correction question must be answered
+
+    def test_legacy_record_edit_and_reset_guards(self):
+        self.save([observation()]); legacy = self.records()[0]
+        legacy.pop('sourceFields'); legacy.pop('overrides'); legacy['fields']['blank'] = '예전에 고친 값'; self.gateway.save(legacy)
+        record = self.records()[0]; record['fields']['quantity'] = 7
+        self.assertNotIn('error', self.call('mvp.edit', {'records': [record]}))
+        record = self.records()[0]
+        self.assertEqual((record['overrides'], record['sourceFields']['blank']), ({'quantity': 7}, '예전에 고친 값'))
+        self.update_settings(columnLocks={'quantity': True})
+        locked = self.call('mvp.corrections.reset', {'records': [{'recordId': record['recordId'], 'storeVersion': record['storeVersion'], 'fields': ['quantity']}]})
+        self.assertEqual(locked['error']['code'], 'LOCKED')
+        self.update_settings(columnLocks={})
+        self.call('mvp.trash', {'records': [{'recordId': record['recordId'], 'storeVersion': record['storeVersion']}]})
+        trashed = self.call('mvp.records', {'stage': 'receipt', 'trashed': True})['result'][0]
+        self.assertEqual(self.call('mvp.corrections.reset', {'records': [{'recordId': trashed['recordId'], 'storeVersion': trashed['storeVersion'], 'fields': ['quantity']}]})['error']['code'], 'TRASHED')
+
+    def test_new_order_starts_with_collected_values_and_no_corrections(self):
+        self.corrected()
+        self.save([observation(order='02')])
+        record = {r['identity'][1]: r for r in self.records()}['02']
+        self.assertEqual((record['overrides'], record['sourceFields']['unitPrice']), ({}, '35608652.5'))
+
     def test_corrections_reset_uses_the_collected_value(self):
         record = self.corrected()
         reset = self.call('mvp.corrections.reset', {'records': [{'recordId': record['recordId'], 'storeVersion': record['storeVersion'], 'fields': ['unitPrice']}]})
