@@ -4,7 +4,7 @@ import { collectionScreen, defaultScreenRules, extractCapture, extractionViews, 
 import { rpc, captureCurrentPage, runLauncher } from './bridge';
 import { RecordView } from './record-view';
 import { collectorBridge, documentItems, screenDocumentItems } from './integrations';
-import { childRowCount, documentCandidates, generationItem, planFields } from './document-fields';
+import { childRowCount, displayChanges, documentCandidates, generationItem, planFields } from './document-fields';
 import { extractionSources, recordSources, type OutputSource } from './document-sources';
 import type { DocumentItem, DocumentProfile, DocumentRequest, DocumentResult } from './contracts';
 import { columnTypeLabels, type MvpColumnType, type CollectionDecision, type CollectionPreview, type ExtractionResult, type ExtractionView, type GridRendererHandle, type GridViewState, type JsonRow, type MvpSettings, type ProcurementObservation, type ProcurementRecord, type ProcurementStage } from './contracts';
@@ -218,6 +218,7 @@ async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen
  const show=(failed:DocumentResult['results'],sent:DocumentItem[])=>{
   resultArea.replaceChildren(node('p',failed.length?`${saved.length}건 저장 · ${failed.length}건 확인 필요`:`${saved.length}건 저장 완료`));
   for(const path of saved)resultArea.append(node('p',path));
+  if(formatNote)resultArea.append(node('p',formatNote));
   for(const item of failed)resultArea.append(node('p',`${sent[item.itemIndex]?.identity.join(' / ')||'자료 '+(item.itemIndex+1)}: ${item.message||'생성하지 못했습니다.'}${item.missingFields?.length?` (${item.missingFields.join(', ')})`:''}`));
   if(failed.length)again('다시 확인');else{run.textContent='완료';message(`${saved.length}건 문서 저장 완료`);}
  };
@@ -235,11 +236,14 @@ async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen
   settings.documentLinks={...settings.documentLinks,[chosenStage]:{...stageLinks,[profileId]:{...stageLinks[profileId],...add}}};await saveSettings();
  };
  const plans=()=>chosenItems.map(item=>planFields(names,item,labels(),savedLinks()));
+ // Template values are sent as document strings by column type and format (#26); the first item's changes are shown.
+ let formatNote='';
  const generate=async()=>{
   let drop:string[]=[];
   for(let attempt=0;attempt<2;attempt++){
    const planned=plans(),sent=chosenItems,acceptEmpty=planned.every(plan=>plan.empty.every(name=>acceptedEmpty.has(name)));
-   const result=await send({requestId:crypto.randomUUID(),payload:{profileId,sourceKind:kind,items:sent.map((item,index)=>generationItem(item,planned[index],{acceptEmpty,blank:[...blank],drop}))}});
+   const changes=displayChanges(planned[0],settings);formatNote=changes.length?'문서 형식으로 바꾼 값(첫 자료): '+changes.map(([name,before,after])=>`${name} ${rawText(before)} → ${rawText(after)}`).join(', '):'';
+   const result=await send({requestId:crypto.randomUUID(),payload:{profileId,sourceKind:kind,items:sent.map((item,index)=>generationItem(item,planned[index],{acceptEmpty,blank:[...blank],drop,display:settings}))}});
    if(!result)return;
    const failed=settle(result,sent);
    const collisions=[...new Set(failed.filter(r=>r.code==='FIELD_COLLISION').flatMap(r=>r.conflicts||[]))];
