@@ -209,6 +209,19 @@ def item_summary(stage, children):
     return {'대표 품명': text(representative.get(name)), '대표 단위': text(representative.get(unit)),
             '합계 수량': total(quantity), '합계 금액': total(amount), '품목 수': str(len(rows))}
 
+SUMMARY_COLUMNS = ('대표 품명', '대표 단위', '합계 수량', '합계 금액', '품목 수')
+
+def order_key(order):
+    """Business order numbers compare as numbers when they are digits ('00' < '01' < '10')."""
+    return (0, int(order), order) if order.isdigit() else (1, 0, order)
+
+def carried_user_values(stage, earlier):
+    """User column values a new order takes from the previous order (user, 2026-10-08, #34); summaries are recomputed."""
+    values = {key: copy.deepcopy(value) for key, value in earlier['userValues'].items() if key not in SUMMARY_COLUMNS}
+    defaults = default_user_values(stage)
+    meaningful = any(not absent(value) and not (key in defaults and same(value, defaults[key])) for key, value in values.items())
+    return values, meaningful
+
 def with_item_summary(record):
     """Fill the summary user columns when empty or still holding the last automatic value; user edits stay."""
     summary = item_summary(record['stage'], record['children'])
@@ -253,6 +266,12 @@ class MvpGateway:
         self.db.execute('INSERT INTO mvp_records(record_id,stage,store_version,payload,deleted_at) VALUES(?,?,?,?,?) ON CONFLICT(record_id) DO UPDATE SET store_version=excluded.store_version,payload=excluded.payload,deleted_at=excluded.deleted_at',
                         (record['recordId'], record['stage'], record['storeVersion'], dumps(record), record.get('deletedAt')))
 
+    def previous_order(self, stage, identity):
+        """The latest earlier order of the same business number outside the trash, if any."""
+        rows = self.db.execute("SELECT payload FROM mvp_records WHERE stage=? AND deleted_at IS NULL AND json_extract(payload, '$.identity[0]')=?", (stage, identity[0])).fetchall()
+        earlier = [record for record in (loads(row[0]) for row in rows) if order_key(record['identity'][1]) < order_key(identity[1])]
+        return max(earlier, key=lambda record: order_key(record['identity'][1]), default=None)
+
     def compare(self, observations, decisions=None, edits=None):
         require(isinstance(observations, list) and 0 < len(observations) <= 20000, '수집 대상이 없거나 너무 많습니다.')
         # Values the user changed in the extraction table, one entry (or None) per observation (#24).
@@ -277,8 +296,14 @@ class MvpGateway:
             require(previous is None or not previous.get('deletedAt'), '휴지통의 자료입니다. 먼저 복원한 뒤 수집하세요.', 'TRASHED')
             versions.append((rid, previous['storeVersion'] if previous else None))
             if previous is None:
-                records.append(with_item_summary({**copy.deepcopy(observation), 'fields': copy.deepcopy(incoming), 'recordId': rid, 'storeVersion': 1, 'userValues': default_user_values(observation['stage'])}))
-                counts['inserted'] += 1; items.append({'recordId': rid, 'status': 'inserted'}); continue
+                # A new order keeps the screen's source values and takes the user columns of the previous order, which stays (#34).
+                user, carried, earlier = default_user_values(observation['stage']), False, self.previous_order(observation['stage'], observation['identity'])
+                if earlier is not None:
+                    versions.append((earlier['recordId'], earlier['storeVersion']))
+                    values, carried = carried_user_values(observation['stage'], earlier)
+                    user = {**user, **values}
+                records.append(with_item_summary({**copy.deepcopy(observation), 'fields': copy.deepcopy(incoming), 'recordId': rid, 'storeVersion': 1, 'userValues': user}))
+                counts['inserted'] += 1; items.append({'recordId': rid, 'status': 'inserted', **({'carriedFrom': earlier['identity'][1]} if carried else {})}); continue
             before_conflicts = len(conflicts)
             fields = merge_fields(previous['fields'], incoming, [], rid, conflicts, decisions)
             children = merge_children(previous['children'], observation['children'], observation['stage'], rid, conflicts, decisions)
