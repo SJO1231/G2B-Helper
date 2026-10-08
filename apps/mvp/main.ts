@@ -237,19 +237,21 @@ async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen
  };
  const plans=()=>chosenItems.map(item=>planFields(names,item,labels(),savedLinks()));
  // Template values are sent as document strings by column type and format (#26); the first item's changes are shown.
- let formatNote='';
+ // Names Studio asked for only by a Block condition keep their stored value: conditions compare raw values.
+ let formatNote='';const conditionNames=new Set<string>();
  const generate=async()=>{
   let drop:string[]=[];
   for(let attempt=0;attempt<2;attempt++){
    const planned=plans(),sent=chosenItems,acceptEmpty=planned.every(plan=>plan.empty.every(name=>acceptedEmpty.has(name)));
-   const changes=displayChanges(planned[0],settings);formatNote=changes.length?'문서 형식으로 바꾼 값(첫 자료): '+changes.map(([name,before,after])=>`${name} ${rawText(before)} → ${rawText(after)}`).join(', '):'';
-   const result=await send({requestId:crypto.randomUUID(),payload:{profileId,sourceKind:kind,items:sent.map((item,index)=>generationItem(item,planned[index],{acceptEmpty,blank:[...blank],drop,display:settings}))}});
+   const changes=displayChanges(planned[0],settings,[...conditionNames]);formatNote=changes.length?'문서 형식으로 바꾼 값(첫 자료): '+changes.map(([name,before,after])=>`${name} ${rawText(before)} → ${rawText(after)}`).join(', '):'';
+   const result=await send({requestId:crypto.randomUUID(),payload:{profileId,sourceKind:kind,items:sent.map((item,index)=>generationItem(item,planned[index],{acceptEmpty,blank:[...blank],drop,display:settings,raw:[...conditionNames]}))}});
    if(!result)return;
    const failed=settle(result,sent);
    const collisions=[...new Set(failed.filter(r=>r.code==='FIELD_COLLISION').flatMap(r=>r.conflicts||[]))];
    // A Helper key named like a Column-mapped template field: send the failed items without it once.
    if(attempt===0&&collisions.length&&!collisions.some(name=>names.includes(name))){drop=collisions;continue;}
    const missing=[...new Set(failed.filter(r=>r.code==='MISSING_FIELDS'||r.code==='MISSING_CONDITION_FIELDS').flatMap(r=>r.missingFields||[]))].filter(name=>!names.includes(name));
+   for(const name of failed.filter(r=>r.code==='MISSING_CONDITION_FIELDS').flatMap(r=>r.missingFields||[]))if(missing.includes(name))conditionNames.add(name);
    if(missing.length){names=[...names,...missing];await review();return;}
    show(failed,sent);return;
   }
@@ -369,7 +371,7 @@ async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen
    const first=probe.results[0];
    if(probe.status==='success'){if(first?.path)saved.push(first.path);chosenItems=[];resultArea.replaceChildren(node('p','서식에 채울 항목이 없어 1개 파일로 저장했습니다.'),node('p',first?.path||''));run.textContent='완료';message('문서 저장 완료');return;}
    if(!['MISSING_FIELDS','MISSING_CONDITION_FIELDS'].includes(first?.code||'')||!first?.missingFields?.length){resultArea.replaceChildren(node('p',first?.message||'서식 항목을 확인하지 못했습니다.'));again('다시 확인');return;}
-   names=first.missingFields;await review();
+   names=first.missingFields;if(first.code==='MISSING_CONDITION_FIELDS')for(const name of names)conditionNames.add(name);await review();
   }catch(error){
    resultArea.replaceChildren(node('p',error instanceof Error?error.message:String(error)));again(pending?'같은 요청 다시 시도':'다시 확인');
    // Nothing chosen yet (for example a blocked row): the selection can be changed again.
