@@ -5,7 +5,6 @@ import sqlite3
 import threading
 import re
 from datetime import datetime, timezone
-from decimal import Decimal, localcontext
 from urllib.parse import urlparse
 from .model import Fault, require, dumps, loads, digest, empty
 from .dictionary_seed import DEFAULTS
@@ -162,82 +161,20 @@ def merge_children(previous, incoming, stage, rid, conflicts, decisions):
                 old['rows'].append(copy.deepcopy(row))
     return merged
 
-# Item keys per stage, checked against real screen captures (#30): name, quantity, unit, amount, order.
-ITEM_SUMMARY = {'receipt': ('dtlsPrnm', 'ctrtDmndQty', 'qtyUntNm', 'ctrtDmndAmt', ['ctrtDmndRcptItemSqno']),
-                'bid': ('dtlsPrnmNm', 'prchsDtlItemQty', 'prchsDtlItemUntVal', 'rowAmtSum', ['bidClsfNo', 'bidPbancItemSqno']),
-                'contract': ('ctrtItemNm', 'ctrtQty', 'ctrtUntVal', 'ctrtAmt', ['ctrtItemSqno'])}
-
-def decimal_of(value):
-    if isinstance(value, bool) or not isinstance(value, (str, int)):
-        return None
-    text = str(value).strip()
-    if not re.fullmatch(r'[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?', text):
-        return None
-    return Decimal(text.replace(',', ''))
-
-def item_summary(stage, children):
-    """Representative item by amount (ties: lower order; no amount: lowest order) and exact totals (user, 2026-10-07, #30)."""
-    name, quantity, unit, amount, order = ITEM_SUMMARY[stage]
-    rows, seen = [], set()
-    for child in children:
-        if child.get('kind') != 'items':
-            continue
-        for row in child['rows']:
-            key = dumps([str(row.get(k)) for k in order]) if all(not absent(row.get(k)) for k in order) else None
-            if key is not None and key in seen:
-                continue
-            seen.add(key)
-            rows.append(row)
-    if not rows:
-        return None
-    def position(row):
-        return tuple((0, decimal_of(row.get(k)), '') if decimal_of(row.get(k)) is not None else (1, Decimal(0), str(row.get(k))) if not absent(row.get(k)) else (2, Decimal(0), '') for k in order)
-    ordered = sorted(rows, key=position)
-    representative = ordered[0]
-    for row in ordered:
-        value, best = decimal_of(row.get(amount)), decimal_of(representative.get(amount))
-        if value is not None and (best is None or value > best):
-            representative = row
-    def total(key):
-        values = [decimal_of(row.get(key)) for row in rows]
-        if any(value is None for value in values):
-            return ''
-        with localcontext() as context:
-            context.prec = sum(len(value.as_tuple().digits) + abs(value.as_tuple().exponent) for value in values) + 10  # exact, never rounded
-            return format(sum(values, Decimal(0)), 'f')
-    text = lambda value: '' if absent(value) else value if isinstance(value, str) else dumps(value)
-    return {'대표 품명': text(representative.get(name)), '대표 단위': text(representative.get(unit)),
-            '합계 수량': total(quantity), '합계 금액': total(amount), '품목 수': str(len(rows))}
-
-SUMMARY_COLUMNS = ('대표 품명', '대표 단위', '합계 수량', '합계 금액', '품목 수')
+# The representative item and total columns of #30 were withdrawn (user, 2026-10-09, #41); their stored values are removed once.
+WITHDRAWN_SUMMARY_COLUMNS = ('대표 품명', '대표 단위', '합계 수량', '합계 금액', '품목 수')
+WITHDRAWN_SUMMARY_TYPES = {'합계 금액': 'money', '합계 수량': 'number'}
+SCHEMA_VERSION = 1  # PRAGMA user_version: 1 = withdrawn summary columns removed (#41)
 
 def order_key(order):
     """Business order numbers compare as numbers when they are ASCII digits ('9' < '10'); other orders follow as text."""
     return (0, int(order), order) if re.fullmatch(r'[0-9]+', order) else (1, 0, order)
 
 def carried_user_values(stage, earlier):
-    """
-    Every user column value of the previous order (user, 2026-10-08, #34), with its last automatic summary so new
-    items refresh only the values the user did not change. Defaults and automatic summaries alone are not announced.
-    """
-    values, automatic = copy.deepcopy(earlier['userValues']), copy.deepcopy(earlier.get('summaryValues', {}))
-    defaults = default_user_values(stage)
-    meaningful = any(not absent(value) and not (key in defaults and same(value, defaults[key])) and not (key in automatic and same(value, automatic[key])) for key, value in values.items())
-    return values, automatic, meaningful
-
-def with_item_summary(record):
-    """Fill the summary user columns when empty or still holding the last automatic value; user edits stay."""
-    summary = item_summary(record['stage'], record['children'])
-    if summary is None:
-        return record
-    previous = record.get('summaryValues', {})
-    user = dict(record['userValues'])
-    for key, value in summary.items():
-        if absent(user.get(key)) or (key in previous and same(user.get(key), previous[key])):
-            user[key] = value
-    if same(user, record['userValues']) and same(summary, previous):
-        return record
-    return {**record, 'userValues': user, 'summaryValues': summary}
+    """Every user column value of the previous order (user, 2026-10-08, #34). Defaults alone are not announced."""
+    values, defaults = copy.deepcopy(earlier['userValues']), default_user_values(stage)
+    meaningful = any(not absent(value) and not (key in defaults and same(value, defaults[key])) for key, value in values.items())
+    return values, meaningful
 
 class MvpGateway:
     def __init__(self, filename):
@@ -257,6 +194,39 @@ class MvpGateway:
         if 'deleted_at' not in {row[1] for row in self.db.execute('PRAGMA table_info(mvp_records)')}:
             self.db.execute('ALTER TABLE mvp_records ADD COLUMN deleted_at TEXT')
         self.db.execute('INSERT OR IGNORE INTO mvp_settings VALUES(1,1,?)', (dumps(default_settings()),))
+        self.migrate()
+
+    def migrate(self):
+        """One-time changes to stored data, tracked by PRAGMA user_version so a later column of the same name is kept."""
+        if self.db.execute('PRAGMA user_version').fetchone()[0] >= SCHEMA_VERSION:
+            return
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            if self.db.execute('PRAGMA user_version').fetchone()[0] < 1:
+                self.drop_summary_columns()
+            self.db.execute('PRAGMA user_version=%d' % SCHEMA_VERSION)
+            self.db.execute('COMMIT')
+        except Exception:
+            self.db.execute('ROLLBACK'); raise
+
+    def drop_summary_columns(self):
+        """Remove the withdrawn summary columns' values, their automatic copies, column definitions and default types (#41)."""
+        names = WITHDRAWN_SUMMARY_COLUMNS
+        query = ("SELECT payload FROM mvp_records WHERE json_type(payload, '$.summaryValues') IS NOT NULL OR EXISTS "
+                 "(SELECT 1 FROM json_each(payload, '$.userValues') WHERE key IN (%s))" % ','.join('?' * len(names)))
+        for (payload,) in self.db.execute(query, names).fetchall():
+            record = loads(payload)
+            record.pop('summaryValues', None)
+            record['userValues'] = {key: value for key, value in record['userValues'].items() if key not in names}
+            self.save({**record, 'storeVersion': record['storeVersion'] + 1})
+        settings = loads(self.db.execute('SELECT payload FROM mvp_settings WHERE singleton=1').fetchone()[0])
+        changed = copy.deepcopy(settings)
+        changed['userColumns'] = {stage: [key for key in keys if key not in names] for stage, keys in settings.get('userColumns', {}).items()}
+        changed['columnTypes'] = {key: kind for key, kind in settings.get('columnTypes', {}).items() if WITHDRAWN_SUMMARY_TYPES.get(key) != kind}
+        if 'userColumns' not in settings: changed.pop('userColumns')
+        if 'columnTypes' not in settings: changed.pop('columnTypes')
+        if not same(changed, settings):
+            self.db.execute('UPDATE mvp_settings SET store_version=store_version+1,payload=? WHERE singleton=1', (dumps(changed),))
 
     def close(self):
         self.db.close()
@@ -309,15 +279,13 @@ class MvpGateway:
                 # A new order keeps the screen's source values and takes the user columns of the previous order, which stays (#34).
                 if observation['stage'] not in order_indexes:
                     order_indexes[observation['stage']] = self.order_index(observation['stage'])
-                user, automatic, carried = default_user_values(observation['stage']), {}, False
+                user, carried = default_user_values(observation['stage']), False
                 earlier = self.previous_order(observation['stage'], observation['identity'], order_indexes[observation['stage']])
                 if earlier is not None:
                     versions.append((earlier['recordId'], earlier['storeVersion']))
-                    values, automatic, carried = carried_user_values(observation['stage'], earlier)
+                    values, carried = carried_user_values(observation['stage'], earlier)
                     user = {**user, **values}
-                    # Carried automatic totals stay when the new order has no items: that is carried data too.
-                    carried = carried or (any(not absent(values.get(key)) for key in SUMMARY_COLUMNS) and item_summary(observation['stage'], observation['children']) is None)
-                records.append(with_item_summary({**copy.deepcopy(observation), 'fields': copy.deepcopy(incoming), 'sourceFields': copy.deepcopy(incoming), 'overrides': {}, 'recordId': rid, 'storeVersion': 1, 'userValues': user, **({'summaryValues': automatic} if automatic else {})}))
+                records.append({**copy.deepcopy(observation), 'fields': copy.deepcopy(incoming), 'sourceFields': copy.deepcopy(incoming), 'overrides': {}, 'recordId': rid, 'storeVersion': 1, 'userValues': user})
                 counts['inserted'] += 1; items.append({'recordId': rid, 'status': 'inserted', **({'carriedFrom': earlier['identity'][1]} if carried else {})}); continue
             before_conflicts = len(conflicts)
             # 당초값 (last collected) and 정정값 (user corrections) are kept apart (#36). A record stored before this keeps
@@ -345,8 +313,7 @@ class MvpGateway:
             status = 'changed' if plain else 'supplemented' if changed else 'identical'
             counts[status] += 1; items.append({'recordId': rid, 'status': status, **({'corrections': corrected} if corrected else {})})
             merged = {**previous, **({'fields': {**fields, **copy.deepcopy(overrides)}, 'sourceFields': fields, 'overrides': overrides, 'children': children, 'rawJson': observation['rawJson'], 'source': observation['source'], 'capturedAt': observation['capturedAt'], 'storeVersion': previous['storeVersion'] + 1} if changed else {})}
-            summarized = with_item_summary(merged)
-            records.append({**summarized, 'storeVersion': previous['storeVersion'] + 1} if summarized is not merged and not changed else summarized)
+            records.append(merged)
         token = {'observations': observations, 'versions': versions, **({'edits': edits} if edits is not None else {})}
         return {'token': digest(token), 'observations': observations, 'conflicts': conflicts, 'counts': counts, 'items': items}, records
 
