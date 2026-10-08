@@ -4,7 +4,7 @@ import { collectionScreen, defaultScreenRules, extractCapture, extractionViews, 
 import { rpc, captureCurrentPage, runLauncher } from './bridge';
 import { RecordView } from './record-view';
 import { collectorBridge, documentItems, screenDocumentItems } from './integrations';
-import { childRowCount, documentCandidates, generationItem, planFields } from './document-fields';
+import { childRowCount, contractUserColumnsGuard, documentCandidates, excludedNames, generationItem, outputColumn, planFields, type Output } from './document-fields';
 import { extractionSources, recordSources, type OutputSource } from './document-sources';
 import type { DocumentItem, DocumentProfile, DocumentRequest, DocumentResult } from './contracts';
 import { columnTypeLabels, type MvpColumnType, type CollectionPreview, type ExtractionResult, type ExtractionView, type GridRendererHandle, type GridViewState, type JsonRow, type MvpSettings, type ProcurementObservation, type ProcurementRecord, type ProcurementStage } from './contracts';
@@ -87,7 +87,7 @@ function showGrid(view:ExtractionView, options:{userKeys?:string[];readonlyKeys?
  destroyGrid();activeView=view;dirty=false;save.disabled=true;save.hidden=false;viewKey=(isDb?'db:':'extract:')+view.key;const viewState=viewStates.get(viewKey);search.value=viewState?.search||'';userVisible=viewState?.userColumnsVisible!==false;hiddenUser.classList.toggle('active',!userVisible);hiddenUser.setAttribute('aria-pressed',String(!userVisible));
  handle=renderGrid(area,{label:view.label,rows:view.rows,viewState,settings:gridSettings(),userColumnKeys:options.userKeys,readOnlyColumnKeys:options.readonlyKeys,readOnly:!isDb,allowRowDelete:isDb,onNotice:text=>message(text,true),
   // The extraction table is view only (user, 2026-10-09, #42); in the DB only user columns are edited.
-  onRowsChanged:()=>{if(!isDb)return;dirty=true;save.disabled=!native;if(stage==='contract'&&recordView)handle?.updateDerivedValues(row=>recordView!.derive(row));},onUserColumnsChanged:(keys)=>{if(!isDb)return;userColumnDraft=recordView!.definitionNames(keys);dirty=true;save.disabled=!native;},onColumnRename:(key,label)=>{settings.dictionary.keys={...settings.dictionary.keys,[isDb?sourceKey(key):key]:label};autosave();},onColumnType:(key,type)=>{settings.columnTypes={...settings.columnTypes,[isDb?sourceKey(key):key]:type};autosave();},onColumnFormat:(key,format)=>{settings.columnFormats={...settings.columnFormats,[isDb?sourceKey(key):key]:format};autosave();},onValueDictionary:(key,value,selection)=>valueDictionary((selection||[{key,value}]).map(entry=>({...entry,key:isDb?sourceKey(entry.key):entry.key}))),...(isDb?{onDeleteRows:(_rows:JsonRow[],indices:number[])=>{void trashRows(indices).catch(fail);},nestedLabel:(index:number,key:string)=>key===recordView?.childNames.get('자격제한')&&typeof shownRecords[index]?.computed?.['업종제한']==='string'?shownRecords[index].computed!['업종제한'] as string:undefined}:{}),onNested:(_row,key,rows)=>nestedView(key,rows),onSettings:propertySettings,tableSettings:!isDb});
+  onRowsChanged:()=>{if(!isDb)return;dirty=true;save.disabled=!native;if(stage==='contract'&&recordView)handle?.updateDerivedValues(row=>recordView!.derive(row));},onUserColumnsChanged:(keys)=>{if(!isDb)return;const next=recordView!.definitionNames(keys);askValueRemoval(next);userColumnDraft=next;dirty=true;save.disabled=!native;},onColumnRename:(key,label)=>{settings.dictionary.keys={...settings.dictionary.keys,[isDb?sourceKey(key):key]:label};autosave();},onColumnType:(key,type)=>{settings.columnTypes={...settings.columnTypes,[isDb?sourceKey(key):key]:type};autosave();},onColumnFormat:(key,format)=>{settings.columnFormats={...settings.columnFormats,[isDb?sourceKey(key):key]:format};autosave();},onValueDictionary:(key,value,selection)=>valueDictionary((selection||[{key,value}]).map(entry=>({...entry,key:isDb?sourceKey(entry.key):entry.key}))),...(isDb?{onDeleteRows:(_rows:JsonRow[],indices:number[])=>{void trashRows(indices).catch(fail);},nestedLabel:(index:number,key:string)=>key===recordView?.childNames.get('자격제한')&&typeof shownRecords[index]?.computed?.['업종제한']==='string'?shownRecords[index].computed!['업종제한'] as string:undefined,output:(alias:string)=>{const column=recordView?.columnOf(alias);return column&&outputColumn(column.key,column.kind,settings);},onOutput:(alias:string,value:boolean)=>{const column=recordView?.columnOf(alias);if(column){settings.outputColumns={...settings.outputColumns,[column.key]:value};autosave();}}}:{}),onNested:(_row,key,rows)=>nestedView(key,rows),onSettings:propertySettings,tableSettings:!isDb});
  if(!userVisible)handle.setUserColumnsVisible(false);
 }
 // The 속성 panel changes the same settings as the settings window and saves them at once (user, #28).
@@ -96,6 +96,12 @@ function showExtraction(){if(!extraction)return;isDb=false;recordView=undefined;
 // Collection needs a read business record of a collection target; a file is view only.
 function collectable(){const ready=native&&!extractionFromFile&&!!extraction?.observations.length;save.disabled=!ready;save.title=ready?'이 화면의 업무 자료를 DB에 저장(수집)합니다.':extractionFromFile?'파일로 연 자료는 보기 전용입니다.':'수집 대상 화면의 업무 자료가 아닙니다.';}
 function recordRow(record:ProcurementRecord){return recordView!.toRow(record);}
+// User columns whose stored values go with the definition on the next save (user, 2026-10-09, #46).
+const removalDraft=new Set<string>();
+function askValueRemoval(next:string[]){
+ for(const name of userColumnDraft)if(!next.includes(name)&&!contractUserColumnsGuard(stage,name)&&records.some(record=>record.userValues[name]!==undefined&&record.userValues[name]!==null&&record.userValues[name]!=='')&&confirm(`'${name}' 열을 지웁니다. 이 열에 저장된 값도 지울까요?\n확인: 값도 지움 · 취소: 값은 남김`))removalDraft.add(name);
+ for(const name of next)removalDraft.delete(name);
+}
 // The displayed records by grid source index: the 자격제한 cell shows the 업종제한 sentence (user, 2026-10-09, #44·#45).
 let shownRecords:ProcurementRecord[]=[];
 function showRecords(){if(dirty){message('입력을 저장한 뒤 필터를 변경하세요.');return;}isDb=true;completion.hidden=finishSelected.hidden=stage!=='contract';const begin=parseDate(start.value),finish=parseDate(end.value);if(dateKey.value&&(!begin||!finish||begin>finish)){message('날짜 구간을 확인하세요.',true);return;}
@@ -104,14 +110,14 @@ function showRecords(){if(dirty){message('입력을 저장한 뒤 필터를 변�
  area.dataset.recordIds=JSON.stringify(filtered.map(r=>r.recordId));message('');
 }
 async function loadRecords(next:ProcurementStage=stage){if(dirty&&!confirm('저장하지 않은 입력을 닫을까요?'))return;const revision=++recordsRevision;area.inert=true;area.setAttribute('aria-busy','true');save.disabled=true;message('불러오는 중…');try{const loaded=native?await rpc<ProcurementRecord[]>('mvp.records',{stage:next}):demoStore.get(next)||demoRecords(next);if(revision!==recordsRevision)return;stage=next;records=loaded;if(!native)demoStore.set(stage,records);dirty=false;isDb=true;heading.textContent='DB';filters.hidden=false;
- recordView=new RecordView(records,stage,settings);userColumnDraft=recordView.definitionNames(recordView.userKeys);
+ recordView=new RecordView(records,stage,settings);userColumnDraft=recordView.definitionNames(recordView.userKeys);removalDraft.clear();
  refreshDateChoices();
  tabList.replaceChildren();for(const [key,label]of Object.entries(stageLabels)){const b=button(label,()=>loadRecords(key as ProcurementStage));b.classList.toggle('active',key===stage);tabList.append(b);}showRecords();}catch(error){if(revision===recordsRevision)throw error;}finally{if(revision===recordsRevision){area.inert=false;area.setAttribute('aria-busy','false');save.disabled=!dirty||!native;}}
 }
 async function saveRows(){if(!isDb||!native)return;await settingsQueue;const ids=JSON.parse(area.dataset.recordIds||'[]') as string[];const rows=handle?.rows()||[];if(rows.length!==ids.length)throw new Error('업무 행 추가는 현재 지원하지 않습니다. 입력을 유지합니다.');
  // Only user columns are sent: source values are read only (user, 2026-10-09, #42).
  const changes=rows.map((row,index)=>{const{recordId,storeVersion,userValues}=recordView!.toEdit(records.find(r=>r.recordId===ids[index])!,row);return{recordId,storeVersion,userValues};});
- await rpc('mvp.edit',{records:changes,userColumns:{stage,keys:userColumnDraft,settingsStoreVersion:settingsVersion}});(settings.userColumns??={})[stage]=userColumnDraft;(confirmedSettings.userColumns??={})[stage]=structuredClone(userColumnDraft);settingsVersion++;dirty=false;await loadRecords();message('저장됨');
+ await rpc('mvp.edit',{records:changes,userColumns:{stage,keys:userColumnDraft,settingsStoreVersion:settingsVersion,...(removalDraft.size?{removeValues:[...removalDraft]}:{})}});removalDraft.clear();(settings.userColumns??={})[stage]=userColumnDraft;(confirmedSettings.userColumns??={})[stage]=structuredClone(userColumnDraft);settingsVersion++;dirty=false;await loadRecords();message('저장됨');
 }
 async function collect(){if(!extraction)extraction=extractCapture(await captureCurrentPage(tabId),undefined,settings.screenRules);if(!extraction.observations.length){const text=extraction.warnings.join(' · ')||'등록 화면과 업무키를 확인하세요.';if(window.parent!==window){window.parent.postMessage({kind:'mvp.notice',message:text,error:true},'*');close();return;}message(text,true);return;}
  // Collection applies the screen's source values without a question (user, 2026-10-09, #43) and opens the DB view in place,
@@ -259,12 +265,13 @@ async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen
   const stageLinks=settings.documentLinks?.[chosenStage]||{};
   settings.documentLinks={...settings.documentLinks,[chosenStage]:{...stageLinks,[profileId]:{...stageLinks[profileId],...add}}};await saveSettings();
  };
- const plans=()=>chosenItems.map(item=>planFields(names,item,labels(),savedLinks()));
+ const output:Output=(key,kind)=>outputColumn(key,kind,settings);
+ const plans=()=>chosenItems.map(item=>planFields(names,item,labels(),savedLinks(),output));
  const generate=async()=>{
   let drop:string[]=[];
   for(let attempt=0;attempt<2;attempt++){
    const planned=plans(),sent=chosenItems,acceptEmpty=planned.every(plan=>plan.empty.every(name=>acceptedEmpty.has(name)));
-   const result=await send({requestId:crypto.randomUUID(),payload:{profileId,sourceKind:kind,items:sent.map((item,index)=>generationItem(item,planned[index],{acceptEmpty,blank:[...blank],drop}))}});
+   const result=await send({requestId:crypto.randomUUID(),payload:{profileId,sourceKind:kind,items:sent.map((item,index)=>generationItem(item,planned[index],{acceptEmpty,blank:[...blank],drop,output}))}});
    if(!result)return;
    const failed=settle(result,sent);
    const collisions=[...new Set(failed.filter(r=>r.code==='FIELD_COLLISION').flatMap(r=>r.conflicts||[]))];
@@ -285,9 +292,11 @@ async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen
   for(const plan of planned)for(const name of plan.empty)if(!acceptedEmpty.has(name))emptyCount.set(name,(emptyCount.get(name)||0)+1);
   if(!unmatched.length&&!emptyCount.size){await generate();return;}
   const box=node('div',undefined,'document-review'),picks=new Map<string,HTMLSelectElement>();
+  const excluded=[...new Set(chosenItems.flatMap(item=>excludedNames(unmatched,item,labels(),output)))];
+  if(excluded.length)box.append(node('p',`출력 제외 열입니다. 라벨을 붙이거나 출력 제외를 푸세요: ${excluded.join(', ')}`));
   if(unmatched.length){
    box.append(node('p','서식에서 맞는 값을 찾지 못한 항목입니다. 원천 키를 고르면 이 업무·서식에 저장해 다음부터 자동으로 넣습니다.'));
-   const keys=[...new Set(chosenItems.flatMap(item=>[...documentCandidates(item).keys()]))];
+   const keys=[...new Set(chosenItems.flatMap(item=>[...documentCandidates(item,output).keys()]))];
    const options:[string,string][]=[['','원천 키 선택'],[blankChoice,'이번에는 빈 값으로 둠'],...keys.map(key=>[key,labels()[key]?`${labels()[key]} · ${key}`:key]as[string,string])];
    for(const name of unmatched){const pick=select(name+' 연결',options),line=node('label',undefined,'document-link');picks.set(name,pick);line.append(node('span',name),pick);box.append(line);}
   }
@@ -344,7 +353,7 @@ async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen
    childNote.textContent=childRows?`하위 표 ${childRows}행은 이번 서식에 넣지 않습니다.`:'';
    resultArea.replaceChildren(node('p','서식 항목을 확인하는 중…'));
    // Studio's 1st edition has no field-list endpoint: an item without data makes it list every value the template needs.
-   const probe=await rpc<DocumentResult>('mvp.document.generate',{profileId,sourceKind:kind,items:[{...chosenItems[0],fields:{},userValues:{},children:[]}]});
+   const {computed:_computed,...probeItem}=chosenItems[0],probe=await rpc<DocumentResult>('mvp.document.generate',{profileId,sourceKind:kind,items:[{...probeItem,fields:{},userValues:{},children:[]}]});
    const first=probe.results[0];
    if(probe.status==='success'){if(first?.path)saved.push(first.path);chosenItems=[];resultArea.replaceChildren(node('p','서식에 채울 항목이 없어 1개 파일로 저장했습니다.'),node('p',first?.path||''));run.textContent='완료';message('문서 저장 완료');return;}
    if(!['MISSING_FIELDS','MISSING_CONDITION_FIELDS'].includes(first?.code||'')||!first?.missingFields?.length){resultArea.replaceChildren(node('p',first?.message||'서식 항목을 확인하지 못했습니다.'));again('다시 확인');return;}

@@ -11,7 +11,7 @@ describe('document input snapshot',()=>{
   const items=screenDocumentItems([original]);
   const view=new RecordView([original],'contract',settings);
   const [dbItem]=documentItems([{sourceIndex:0,row:view.toRow(original)}],{kind:'db',records:[original],recordIds:['0001'],view});
-  expect(items[0]).toEqual({...dbItem,userValues:{}});
+  const {computed,...stored}=dbItem;expect(items[0]).toEqual({...stored,userValues:{}});expect(computed).toEqual({지체일수:'',미종결금액:''});
   expect(dbItem.userValues).toEqual({memo:'',종결:false,종결금액:'',지정일:'',선금보증금액:'',선금보증기한:''});
   expect(items[0].fields).toMatchObject({zero:0,flag:false,blank:'',amount:'12345678901234567890.0001'});
   expect(items[0].identity).toEqual(['0001','01']);expect(items[0].children[0].rows[0].id).toBe('0001');
@@ -43,6 +43,12 @@ describe('document input snapshot',()=>{
   const row={ctrtNo:'0001',ctrtChgOrd:'01',flag:false,zero:0,amount:'12345678901234567890.01',blank:'',nested:[{id:'001'}]};
   const [item]=documentItems([{sourceIndex:7,row}],{kind:'screen',stage:'contract',view:{key:'frame2::A',label:'A',rows:[],source:{url:'https://www.g2b.go.kr/',framePath:'frame2',areaCd:'14',depth1:'01570',depth2:'01571'}}});
   expect(item.fields).toEqual(row);expect(item.source).toMatchObject({framePath:'frame2',tableKey:'frame2::A'});expect(item.children).toEqual([]);item.fields.zero=1;expect(row.zero).toBe(0);
+ });
+ it('sends only defined user columns and adds computed and contract calculation values (#46)',()=>{
+  const r=record('0003');r.userValues={memo:'정의됨',지운열:'남은 값',종결금액:'1'};r.fields.ctrtAmt='10';r.computed={업종제한:'[A(1)] 업종'};
+  const view=new RecordView([r],'contract',settings),[item]=documentItems([{sourceIndex:0,row:view.toRow(r)}],{kind:'db',records:[r],recordIds:['0003'],view});
+  expect(item.userValues).not.toHaveProperty('지운열');expect(item.userValues.memo).toBe('정의됨');
+  expect(item.computed).toEqual({업종제한:'[A(1)] 업종',지체일수:'',미종결금액:'9'});
  });
  it('rejects no selection and mismatched DB row mapping',()=>{
   expect(()=>documentItems([],{kind:'screen',view:{key:'A',label:'A',rows:[]},stage:'contract'})).toThrow();

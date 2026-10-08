@@ -512,6 +512,34 @@ class MvpTests(unittest.TestCase):
         self.gateway.db.execute('PRAGMA user_version=3'); self.gateway.close(); self.gateway = MvpGateway(self.path)
         self.assertEqual(self.call('mvp.settings.read')['result']['settings']['dictionary']['keys']['lcnsLmtYn'], '사용자 라벨')
 
+    def test_output_columns_setting_is_validated_and_kept(self):
+        for invalid in ([], {'ctrtNo': 1}, {'ctrtNo': None}):
+            self.assertEqual(self.update_settings(outputColumns=invalid)['error']['code'], 'VALIDATION')
+        saved = self.update_settings(outputColumns={'ctrtNo': False, 'deptNm': True})['result']
+        self.gateway.close(); self.gateway = MvpGateway(self.path)
+        self.assertEqual(self.call('mvp.settings.read')['result']['settings']['outputColumns'], {'ctrtNo': False, 'deptNm': True})
+
+    def test_removed_user_column_values_go_on_request(self):
+        # Deleting a user column asks whether its values go too (user, 2026-10-09, #46): every record of the stage, trash included.
+        self.save([observation(number='A'), observation(number='B'), observation(number='C')])
+        rows = {r['identity'][0]: r for r in self.records()}
+        for row in rows.values():
+            row['userValues'] = {'메모': '지움', '남김': '둠'}
+        rows = {r['identity'][0]: r for r in self.call('mvp.edit', {'records': list(rows.values())})['result']}
+        self.call('mvp.trash', {'records': [{'recordId': rows['C']['recordId'], 'storeVersion': rows['C']['storeVersion']}]})
+        settings = self.call('mvp.settings.read')['result']
+        column = {'stage': 'receipt', 'keys': ['남김'], 'settingsStoreVersion': settings['storeVersion']}
+        for bad in (['남김'], ['종결'], ['지체일수'], '메모', [1]):
+            self.assertEqual(self.call('mvp.edit', {'records': [rows['A']], 'userColumns': {**column, 'removeValues': bad}})['error']['code'], 'VALIDATION')
+        self.assertEqual(self.records()[0]['userValues'], {'메모': '지움', '남김': '둠'})  # atomic
+        edited = self.call('mvp.edit', {'records': [rows['A']], 'userColumns': {**column, 'removeValues': ['메모']}})['result'][0]
+        self.assertEqual((edited['userValues'], edited['storeVersion']), ({'남김': '둠'}, rows['A']['storeVersion'] + 1))
+        after = {r['identity'][0]: r for r in self.records()}
+        self.assertEqual((after['B']['userValues'], after['B']['storeVersion']), ({'남김': '둠'}, rows['B']['storeVersion'] + 1))
+        trashed = self.call('mvp.records', {'stage': 'receipt', 'trashed': True})['result'][0]
+        self.assertEqual(trashed['userValues'], {'남김': '둠'})
+        self.assertEqual(after['A']['storeVersion'], edited['storeVersion'])  # the edited row is not bumped twice
+
     def test_user_completion_survives_collection(self):
         source = observation('contract'); self.save([source]); record = self.records('contract')[0]
         self.assertIs(record['userValues']['종결'], False)

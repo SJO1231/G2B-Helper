@@ -22,7 +22,7 @@ export type MvpColumnType = keyof typeof columnTypeLabels;
 export interface MvpColumnFormat { decimals?: number; grouping?: boolean; dateFormat?: 'dot' | 'dash' | 'compact'; }
 export type GridFilter = { mode: 'values'; values: string[] } | { mode: 'exact' | 'includes' | 'exclude'; terms: string[] };
 export interface GridViewState { search: string; combine: 'and' | 'or'; filters: [string, GridFilter][]; columns: { key: string; width: number; visible: boolean }[]; sorters: { key: string; dir: 'asc' | 'desc' }[]; userColumnsVisible?: boolean; }
-export interface MvpSettings { theme: 'light' | 'dark'; extractionMode: 'tables' | 'all'; hideEmptyColumns: boolean; hideUnmappedColumns: boolean; hideEmptyTables?: boolean; dictionary: FieldDictionary; launchers: { id: string; label: string; script: string }[]; shortcuts?: Partial<Record<MvpShortcutAction,string>>; columnTypes?: Record<string,MvpColumnType>; columnFormats?: Record<string,MvpColumnFormat>; screenRules?: CaptureScreenRule[]; userColumns?: Partial<Record<ProcurementStage,string[]>>; documentProfiles?: Partial<Record<ProcurementStage,string>>; documentLinks?: Partial<Record<ProcurementStage,Record<string,Record<string,string>>>>; }
+export interface MvpSettings { theme: 'light' | 'dark'; extractionMode: 'tables' | 'all'; hideEmptyColumns: boolean; hideUnmappedColumns: boolean; hideEmptyTables?: boolean; dictionary: FieldDictionary; launchers: { id: string; label: string; script: string }[]; shortcuts?: Partial<Record<MvpShortcutAction,string>>; columnTypes?: Record<string,MvpColumnType>; columnFormats?: Record<string,MvpColumnFormat>; outputColumns?: Record<string,boolean>; screenRules?: CaptureScreenRule[]; userColumns?: Partial<Record<ProcurementStage,string[]>>; documentProfiles?: Partial<Record<ProcurementStage,string>>; documentLinks?: Partial<Record<ProcurementStage,Record<string,Record<string,string>>>>; }
 export interface GridRendererOptions {
   label: string; rows: JsonRow[]; settings: MvpSettings; readOnly?: boolean;
   userColumnKeys?: string[];
@@ -39,6 +39,9 @@ export interface GridRendererOptions {
   onNested?: (row: JsonRow, key: string, rows: JsonRow[]) => void;
   /** A child table cell's own text instead of its row count, by grid source index and column key. */
   nestedLabel?: (sourceIndex: number, key: string) => string | undefined;
+  /** Whether a column goes to documents (#46); undefined hides the 속성 '출력 제외' box for that column. */
+  output?: (key: string) => boolean | undefined;
+  onOutput?: (key: string, output: boolean) => void;
   /** Settings changed from the 속성 panel; `tableSettings` enables the 테이블 분류 controls (extraction only). */
   onSettings?: (changes: Partial<Pick<MvpSettings, 'hideEmptyColumns' | 'hideUnmappedColumns' | 'hideEmptyTables' | 'extractionMode'>>) => void;
   tableSettings?: boolean;
@@ -55,7 +58,8 @@ export interface GridRendererHandle {
   destroy(): void;
 }
 export type MvpRpcCommand = 'mvp.health' | 'mvp.preview' | 'mvp.apply' | 'mvp.records' | 'mvp.edit' | 'mvp.trash' | 'mvp.restore' | 'mvp.settings.read' | 'mvp.settings.save' | 'mvp.document.profiles' | 'mvp.document.generate';
-export interface DocumentItem { stage: ProcurementStage; identity: string[]; fields: JsonRow; userValues: JsonRow; children: NestedDataset[]; source: ScreenLocator | JsonRow; }
+/** `computed`: Helper columns for documents (#45/#46); generation sends them with the user values. */
+export interface DocumentItem { stage: ProcurementStage; identity: string[]; fields: JsonRow; userValues: JsonRow; computed?: JsonRow; children: NestedDataset[]; source: ScreenLocator | JsonRow; }
 export interface DocumentProfile { id: string; label: string; revisionId: number; outputDirectory: string; }
 export interface DocumentRequest { profileId: string; sourceKind: 'screen' | 'db'; items: DocumentItem[]; }
 export interface DocumentResult { requestId: string; status: 'success' | 'needs-input' | 'error' | 'partial'; results: { itemIndex: number; status: 'success' | 'needs-input' | 'error'; path?: string; code?: string; message?: string; missingFields?: string[]; conflicts?: string[] }[]; summary: { succeeded: number; needsInput: number; failed: number }; }

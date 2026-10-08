@@ -42,6 +42,16 @@ export class RecordView {
   return{recordId:record.recordId,storeVersion:record.storeVersion,fields:structuredClone(record.fields),userValues:{...record.userValues,...this.userFromRow(row)}};
  }
  definitionNames(displayKeys:string[]){return displayKeys.map(key=>[...this.userNames].find(([,alias])=>alias===key)?.[0]||key).filter(name=>!derived.has(name));}
+ /** Only defined user columns go to documents (user, 2026-10-09, #46); a removed definition's stored values do not. */
+ definedUserValues(values:JsonRow):JsonRow{return Object.fromEntries(Object.entries(values).filter(([name])=>this.userNames.has(name)&&!derived.has(name)));}
+ /** The contract calculations under their own names, for documents (#46). */
+ derivedValues(fields:JsonRow,userValues:JsonRow):JsonRow{if(this.stage!=='contract')return{};const values=withContractValues(fields,userValues,this.settings);return Object.fromEntries([...derived].map(name=>[name,values[name]]));}
+ /** The column behind a grid key, for the output setting: user (and contract calculation), computed or source. */
+ columnOf(alias:string):{key:string;kind:'source'|'user'|'computed'}|undefined{
+  for(const[name,key]of this.userNames)if(key===alias)return{key:name,kind:'user'};
+  for(const[name,key]of this.computedNames)if(key===alias)return{key:name,kind:'computed'};
+  return this.sourceKeys.has(alias)?{key:alias,kind:'source'}:undefined;
+ }
  derive(row:JsonRow):JsonRow{
   if(this.stage!=='contract')return{};
   const fields=Object.fromEntries([...this.sourceKeys].map(key=>[key,row[key]]));const values=withContractValues(fields,this.userFromRow(row),this.settings);
