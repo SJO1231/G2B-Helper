@@ -437,6 +437,20 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     expect(table.options.columns[1].formatter(table.getRows()[0].getCell('f1')).textContent).toBe('<img src=x onerror=alert(1)>');
     await Promise.resolve(); handle.destroy();
   });
+  it('keeps an invalid date editor open through a redraw and cancels it only when the user leaves', async () => {
+    const onNotice = vi.fn();
+    const handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '날짜 편집', rows: [{ date: '20261101' }], settings, onNotice });
+    const table = state.tables[0]; table.fire('tableBuilt');
+    const cell = table.getRows()[0].getCell('f0'), success = vi.fn(), cancel = vi.fn();
+    const input = table.options.columns[0].editor(cell, (run: Function) => run(), success, cancel), focus = vi.spyOn(input, 'focus');
+    input.value = '2026.02.30'; input.fire('keydown', { key: 'Enter', shiftKey: false, preventDefault() {}, stopPropagation() {} });
+    expect(onNotice).toHaveBeenLastCalledWith(expect.stringContaining('유효한'));
+    // The notice resizes the sheet; Tabulator's redraw detaches the editor and the browser fires blur.
+    table.fire('renderStarted'); input.fire('blur'); table.fire('renderComplete'); await Promise.resolve();
+    expect(cancel).not.toHaveBeenCalled(); expect(success).not.toHaveBeenCalled(); expect(focus).toHaveBeenCalled(); expect(input.value).toBe('2026.02.30');
+    input.fire('blur'); expect(cancel).toHaveBeenCalledWith('20261101'); expect(success).not.toHaveBeenCalled();
+    handle.destroy();
+  });
   it('returns rows in stable input order after sorting while Excel keeps the displayed order', () => {
     const handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '저장 순서', rows: [{ code: '001' }, { code: '002' }], settings });
     const table = state.tables[0]; table.fire('tableBuilt'); [table.data[0], table.data[1]] = [table.data[1], table.data[0]];

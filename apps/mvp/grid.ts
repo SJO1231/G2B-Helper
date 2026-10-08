@@ -47,7 +47,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
   }
   const readOnlyKeys = new Set(options.readOnlyColumnKeys || []);
   let userColumnsVisible = saved?.userColumnsVisible !== false;
-  let ready = false, disposed = false, batching = false, extending = false;
+  let ready = false, disposed = false, batching = false, extending = false, rendering = false;
   let editSeed: { cell: CellComponent; text: string } | undefined;
   const pending: (() => void)[] = [];
   const root = element('section', undefined, 'mvp-grid');
@@ -183,7 +183,8 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
         if (commit()) queueMicrotask(() => { if (!disposed) move(cell, event.key, event.shiftKey); });
       }
     });
-    input.addEventListener('blur', () => { if (!done && !commit()) { done = true; cancel(cell.getValue()); } });
+    // A redraw (e.g. the sheet resizing when a notice appears) detaches and reattaches the editor; that is not leaving the cell.
+    input.addEventListener('blur', () => { if (rendering) queueMicrotask(() => { if (!done) input.focus(); }); else if (!done && !commit()) { done = true; cancel(cell.getValue()); } });
     return input;
   };
   const openPanel = (title: string): HTMLDivElement => {
@@ -534,6 +535,8 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
     }
     emit(); void extendSlots();
   });
+  table.on('renderStarted', () => { rendering = true; });
+  table.on('renderComplete', () => { rendering = false; });
   table.on('dataFiltered', updateCount);
   table.on('columnVisibilityChanged', updateCount);
   table.on('clipboardPasted', () => { void extendSlots(); });
