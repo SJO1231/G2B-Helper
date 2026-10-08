@@ -45,9 +45,20 @@ describe('G2B screen output sources (#24)', () => {
     expect(extractionSources([{ sourceIndex: 5, row: { name: 'new' } }], plain, [], plain.rows, false)).toEqual([{ kind: 'output', row: { name: 'new' } }]);
   });
 
-  it('blocks a row whose key is not among the screen records', () => {
-    const rows = view(list, 'contracts').rows;
-    expect(extractionSources([{ sourceIndex: 0, row: { ...rows[0], ctrtNo: 'L-9' } }], view(list, 'contracts'), list.observations, rows, true)[0].kind).toBe('blocked');
+  it('blocks rows added in the table, edited business keys and keys not among the screen records', () => {
+    const rows = view(list, 'contracts').rows, sources = (row: Record<string, unknown>, pristine: (Record<string, unknown> | undefined)[]) => extractionSources([{ sourceIndex: 0, row }], view(list, 'contracts'), list.observations, pristine, true)[0];
+    expect(sources(rows[0], [undefined])).toMatchObject({ kind: 'blocked', reason: expect.stringContaining('추가한 행') });
+    expect(sources({ ...rows[0], ctrtNo: 'L-2' }, rows)).toMatchObject({ kind: 'blocked', reason: expect.stringContaining('고칠 수 없습니다') });
+    const unknown = { ctrtNo: 'L-9', ctrtChgOrd: '00', title: 'unknown' };
+    expect(sources(unknown, [unknown]).kind).toBe('blocked');
+  });
+
+  it('compares each row with the screen row it came from, not with its position', () => {
+    // After rows were deleted or added and the table drawn again, the caller maps grid indices back to screen rows.
+    const rows = view(list, 'contracts').rows, pristine = [rows[1], undefined];
+    const [kept, added] = extractionSources([{ sourceIndex: 0, row: { ...rows[1], title: 'changed' } }, { sourceIndex: 1, row: { name: 'new' } }], view(list, 'contracts'), list.observations, pristine, true);
+    expect(kept).toMatchObject({ kind: 'record', observation: { identity: ['L-2', '00'] }, edits: { title: 'changed' } });
+    expect(added.kind).toBe('blocked');
   });
 
   it('joins rows of one record and refuses different edits of the same value', () => {

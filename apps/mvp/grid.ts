@@ -98,6 +98,8 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
   const buffer = (range?: 'active'): GridBufferRow[] => ready ? table.getRows(range).map(row => row.getData() as GridBufferRow) : initial;
   // Persistence pairs rows with record IDs in input order; sorting is presentation only.
   const rows = (): JsonRow[] => model.rows(buffer().slice().sort((a, b) => a._mvpRow - b._mvpRow));
+  // The source index of each rows() entry, so a caller can keep where a row came from across a later render.
+  const rowIds = (): number[] => buffer().slice().sort((a, b) => a._mvpRow - b._mvpRow).filter(row => !model.blankSlot(row)).map(row => row._mvpRow);
   const notice = (message: string): void => {
     if (options.onNotice) options.onNotice(message);
     else { status.textContent = message; status.title = message; }
@@ -105,7 +107,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
   const report = (error: unknown): void => { notice(error instanceof Error ? error.message : String(error)); };
   const emit = (): void => {
     if (disposed || batching) return;
-    notice(''); options.onRowsChanged?.(rows()); updateCount();
+    notice(''); options.onRowsChanged?.(rows(), rowIds()); updateCount();
   };
   const batch = (run: () => void): void => { batching = true; batchEdits = []; try { run(); } finally { batching = false; if (!replaying) remember(batchEdits); batchEdits = []; } emit(); };
   const updateCount = (): void => {

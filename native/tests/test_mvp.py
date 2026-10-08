@@ -264,6 +264,13 @@ class MvpTests(unittest.TestCase):
         self.assertNotIn('error', self.call('mvp.apply', {'observations': [source], 'edits': [{'quantity': 8}], 'token': preview['token'], 'decisions': [{**preview['conflicts'][0], 'useIncoming': True}]}))
         self.assertEqual(self.records()[0]['fields']['quantity'], 8)
 
+    def test_extraction_edit_to_empty_keeps_db_value_like_collection(self):
+        source = source_capture(observation()); self.save([observation()])
+        preview = self.call('mvp.preview', {'observations': [source], 'edits': [{'unitPrice': ''}]})['result']
+        self.assertEqual((preview['items'][0]['status'], preview['conflicts']), ('identical', []))
+        self.assertNotIn('error', self.call('mvp.apply', {'observations': [source], 'edits': [{'unitPrice': ''}], 'token': preview['token'], 'decisions': []}))
+        self.assertEqual(self.records()[0]['fields']['unitPrice'], '35608652.5')
+
     def test_extraction_edits_keep_identity_locks_and_shape(self):
         source = source_capture(observation())
         self.update_settings(columnLocks={'unitPrice': True})

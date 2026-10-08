@@ -28,7 +28,7 @@ export interface GridRendererOptions {
   viewState?: GridViewState;
   itemColumnKeys?: string[];
   readOnlyColumnKeys?: string[];
-  onRowsChanged?: (rows: JsonRow[]) => void; onColumnRename?: (key: string, label: string) => void;
+  onRowsChanged?: (rows: JsonRow[], sourceIndices: number[]) => void; onColumnRename?: (key: string, label: string) => void;
   onColumnType?: (key: string, type: MvpColumnType) => void;
   onColumnFormat?: (key: string, format: MvpColumnFormat) => void;
   onColumnLock?: (key: string, locked: boolean) => void;
