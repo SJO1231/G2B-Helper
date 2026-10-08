@@ -38,9 +38,12 @@ export interface GridRendererOptions {
   onDeleteRows?: (rows: JsonRow[], sourceIndices: number[]) => void;
   onUserColumnsChanged?: (keys: string[]) => void;
   onNested?: (row: JsonRow, key: string, rows: JsonRow[]) => void;
+  /** Settings changed from the 속성 panel; `tableSettings` enables the 테이블 분류 controls (extraction only). */
+  onSettings?: (changes: Partial<Pick<MvpSettings, 'hideEmptyColumns' | 'hideUnmappedColumns' | 'hideEmptyTables' | 'extractionMode'>>) => void;
+  tableSettings?: boolean;
 }
 export interface GridRendererHandle {
-  rows(): JsonRow[]; setSearch(search: string): void; setSettings(settings: MvpSettings): void;
+  rows(): JsonRow[]; setSearch(search: string): void; clearColumnFilters(): void; setSettings(settings: MvpSettings): void;
   getSelectedRows(): { sourceIndex: number; row: JsonRow }[];
   setRowFilter(predicate?: (row: JsonRow) => boolean): void;
   setUserColumnsVisible(visible: boolean): void;
