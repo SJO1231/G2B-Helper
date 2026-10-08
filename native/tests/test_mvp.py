@@ -332,6 +332,17 @@ class MvpTests(unittest.TestCase):
         receipts = {r['identity'][0]: r['userValues'] for r in self.records()}
         self.assertEqual(receipts['TEST-001']['대표 품명'], '접수 품목'); self.assertEqual(receipts['NO-ITEMS'], {})
 
+    def test_item_summary_exact_totals_integers_duplicates_and_cleared_cells(self):
+        source = observation('contract')
+        source['children'] = [
+            {'key': 'items', 'label': '물품', 'kind': 'items', 'rows': [{'ctrtItemSqno': 1, 'ctrtItemNm': '하나', 'ctrtQty': 2, 'ctrtAmt': '12345678901234567890.123456789'}, {'ctrtItemNm': '순번 없음', 'ctrtQty': 1, 'ctrtAmt': '0.000000001'}]},
+            {'key': 'itemsExcel', 'label': '물품 엑셀', 'kind': 'items', 'rows': [{'ctrtItemSqno': '1', 'ctrtItemNm': '하나', 'ctrtQty': 2, 'ctrtAmt': '12345678901234567890.123456789'}]}]
+        self.save([source]); record = self.records('contract')[0]
+        self.assertEqual((record['userValues']['합계 금액'], record['userValues']['합계 수량'], record['userValues']['품목 수']), ('12345678901234567890.123456790', '3', '2'))
+        record['userValues']['대표 품명'] = ''
+        self.assertNotIn('error', self.call('mvp.edit', {'records': [record]}))
+        self.save([source]); self.assertEqual(self.records('contract')[0]['userValues']['대표 품명'], '하나')
+
     def test_false_is_not_zero(self):
         self.save([observation()]); changed = observation(); changed['fields']['quantity'] = False
         self.assertEqual(len(self.call('mvp.preview', {'observations': [source_capture(changed)]})['result']['conflicts']), 1)

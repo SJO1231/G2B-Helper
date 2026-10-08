@@ -19,30 +19,58 @@ const itemKeys = [
   { name: 'dtlsPrnm', quantity: 'ctrtDmndQty', unit: 'qtyUntNm', amount: 'ctrtDmndAmt', order: ['ctrtDmndRcptItemSqno'] },
 ];
 const decimalOf = (value: unknown): Decimal | undefined => { const text = typeof value === 'number' && Number.isFinite(value) ? String(value) : typeof value === 'string' ? numericText(value) : undefined; return text === undefined ? undefined : new Decimal(text); };
+const itemRows = (value: unknown): JsonRow[] => (Array.isArray(value) ? value : [value]).filter((item): item is JsonRow => item !== null && typeof item === 'object' && !Array.isArray(item));
 /**
- * The items cell shows the representative item (largest amount; ties and no amounts: lowest order) with its quantity,
- * unit and amount and the item count, instead of '외 N건' (user, #30). The nested value remains available unchanged.
+ * The representative item, chosen as the Native host does (#30): order by the stage's order keys (numbers, then text,
+ * then missing), take the largest amount (ties keep the lower order; no amount keeps the lowest order). Rows repeating
+ * a complete order key count once.
+ */
+export function representativeItem(value: unknown): { row: JsonRow; count: number; keys: typeof itemKeys[number] } | undefined {
+  const rows = itemRows(value), keys = itemKeys.find(entry => rows.some(row => own(row, entry.order[entry.order.length - 1])));
+  if (!keys) return;
+  const seen = new Set<string>(), unique = rows.filter(row => { if (!keys.order.every(name => !isEmpty(row[name]))) return true; const id = JSON.stringify(keys.order.map(name => String(row[name]))); if (seen.has(id)) return false; seen.add(id); return true; });
+  const rank = (value: unknown): [number, Decimal | string] => { const number = decimalOf(value); return number ? [0, number] : isEmpty(value) || typeof value === 'object' ? [2, ''] : [1, String(value)]; };
+  const compare = (a: JsonRow, b: JsonRow): number => {
+    for (const name of keys.order) {
+      const [x, xv] = rank(a[name]), [y, yv] = rank(b[name]);
+      if (x !== y) return x - y;
+      const order = x === 0 ? (xv as Decimal).cmp(yv as Decimal) : x === 1 ? (xv < yv ? -1 : xv > yv ? 1 : 0) : 0;
+      if (order) return order;
+    }
+    return 0;
+  };
+  const ordered = unique.slice().sort(compare);
+  let row = ordered[0];
+  for (const candidate of ordered) { const amount = decimalOf(candidate[keys.amount]), best = decimalOf(row[keys.amount]); if (amount && (!best || amount.gt(best))) row = candidate; }
+  return { row, count: unique.length, keys };
+}
+const isItems = (value: unknown, key: string): boolean => ['items', '물품', '품목'].includes(key) && value !== null && typeof value === 'object';
+const shown = (value: unknown): string => isEmpty(value) || typeof value === 'object' ? '' : rawText(value);
+/**
+ * The items cell shows the representative item's name, quantity, unit and amount and the item count instead of
+ * '외 N건' (user, #30). The nested value remains available unchanged.
  */
 export function nestedPreview(value: unknown, key: string): string {
-  if (!['items', '물품', '품목'].includes(key) || value === null || typeof value !== 'object') return rawText(value);
-  const items = Array.isArray(value) ? value : [value];
-  const rows = items.filter((item): item is JsonRow => item !== null && typeof item === 'object' && !Array.isArray(item));
-  const count = items.length > 1 ? ' (전체 ' + items.length + '개 품목)' : '';
-  const keys = itemKeys.find(entry => rows.some(row => own(row, entry.order[entry.order.length - 1])));
-  if (keys) {
-    const position = (row: JsonRow) => keys.order.map(name => decimalOf(row[name]));
-    const ordered = rows.slice().sort((a, b) => { const x = position(a), y = position(b); for (let i = 0; i < x.length; i++) { if (x[i] && y[i] && !x[i]!.eq(y[i]!)) return x[i]!.cmp(y[i]!); if (!x[i] !== !y[i]) return x[i] ? -1 : 1; } return 0; });
-    let representative = ordered[0];
-    for (const row of ordered) { const amount = decimalOf(row[keys.amount]), best = decimalOf(representative[keys.amount]); if (amount && (!best || amount.gt(best))) representative = row; }
-    const part = (name: string) => isEmpty(representative[name]) || typeof representative[name] === 'object' ? '' : rawText(representative[name]);
-    const quantity = [part(keys.quantity), part(keys.unit)].filter(Boolean).join(' '), amount = part(keys.amount) && formatValue(part(keys.amount), 'money');
-    if (part(keys.name)) return [part(keys.name), quantity, amount].filter(Boolean).join(' · ') + count;
+  if (!isItems(value, key)) return rawText(value);
+  const rows = itemRows(value), summary = representativeItem(value);
+  if (summary) {
+    const { row, count, keys } = summary;
+    const quantity = [shown(row[keys.quantity]), shown(row[keys.unit])].filter(Boolean).join(' '), amount = shown(row[keys.amount]) && formatValue(shown(row[keys.amount]), 'money');
+    return [shown(row[keys.name]) || '(품명 없음)', quantity, amount].filter(Boolean).join(' · ') + (count > 1 ? ' (전체 ' + count + '개 품목)' : '');
   }
+  const count = (Array.isArray(value) ? value.length : 1) > 1 ? ' (전체 ' + (value as unknown[]).length + '개 품목)' : '';
   const names = ['dtlsPrnm', 'dtlsPrnmNm', 'ctrtItemNm', 'itemCfnm', 'prdctNm', 'prnm', '품명', '세부품명', 'name'];
   for (const item of rows) for (const name of names) {
     if (own(item, name) && !isEmpty(item[name]) && typeof item[name] !== 'object') return rawText(item[name]) + count;
   }
   return rawText(value);
+}
+/** The hover text of an items cell lists every field of the representative item (Q7 "해당한거 전부", #30). */
+export function nestedTitle(value: unknown, key: string, label: (key: string) => string): string {
+  const summary = isItems(value, key) ? representativeItem(value) : undefined;
+  if (!summary) return rawText(value);
+  const lines = Object.entries(summary.row).filter(([, field]) => !isEmpty(field) && typeof field !== 'object').map(([name, field]) => label(name) + ': ' + rawText(field));
+  return ['대표 품목', ...lines, '전체 ' + summary.count + '개 품목 · 누르면 전체 상세'].join('\n');
 }
 
 /** Excel TSV supports quoted tabs/newlines and escaped quotes; CRLF is a row separator. */

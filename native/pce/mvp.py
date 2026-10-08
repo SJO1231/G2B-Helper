@@ -5,7 +5,7 @@ import sqlite3
 import threading
 import re
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from urllib.parse import urlparse
 from .model import Fault, require, dumps, loads, digest, empty
 from .dictionary_seed import DEFAULTS
@@ -183,7 +183,7 @@ def item_summary(stage, children):
         if child.get('kind') != 'items':
             continue
         for row in child['rows']:
-            key = dumps([row.get(k) for k in order]) if all(not absent(row.get(k)) for k in order) else None
+            key = dumps([str(row.get(k)) for k in order]) if all(not absent(row.get(k)) for k in order) else None
             if key is not None and key in seen:
                 continue
             seen.add(key)
@@ -200,8 +200,12 @@ def item_summary(stage, children):
             representative = row
     def total(key):
         values = [decimal_of(row.get(key)) for row in rows]
-        return '' if any(value is None for value in values) else format(sum(values, Decimal(0)), 'f')
-    text = lambda value: '' if absent(value) else str(value)
+        if any(value is None for value in values):
+            return ''
+        with localcontext() as context:
+            context.prec = sum(len(value.as_tuple().digits) + abs(value.as_tuple().exponent) for value in values) + 10  # exact, never rounded
+            return format(sum(values, Decimal(0)), 'f')
+    text = lambda value: '' if absent(value) else value if isinstance(value, str) else dumps(value)
     return {'대표 품명': text(representative.get(name)), '대표 단위': text(representative.get(unit)),
             '합계 수량': total(quantity), '합계 금액': total(amount), '품목 수': str(len(rows))}
 
