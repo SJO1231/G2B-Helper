@@ -401,7 +401,8 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
       hozAlign: ['money', 'number', 'percent'].includes(typeOf(column) || '') ? 'right' : typeOf(column) === 'boolean' ? 'center' : 'left',
       headerContextMenu: menu, editor: options.readOnly ? undefined : editCell,
       // Tabulator 6.5 loadMenuEvent accepts functions; @types 6.3 declares only arrays.
-      contextMenu: (options.onValueDictionary || options.allowRowDelete ? (_event: UIEvent, cell: CellComponent) => [
+      contextMenu: (options.onValueDictionary || options.allowRowDelete || options.onCorrection ? (_event: UIEvent, cell: CellComponent) => [
+        ...(options.correction?.(cell.getRow().getData()._mvpRow, column.key) ? [{ label: '정정값 확인', action: () => options.onCorrection?.(cell.getRow().getData()._mvpRow, column.key) }] : []),
         ...(options.onValueDictionary ? [{ label: '값 사전 추가', action: () => { const chosen = selected(),included = chosen.some(candidate => candidate.getField() === cell.getField() && candidate.getRow().getData()._mvpRow === cell.getRow().getData()._mvpRow); const entries = (included ? chosen.filter(candidate => !model.blankSlot(candidate.getRow().getData() as GridBufferRow)) : [cell]).map(candidate => ({ key: getColumn(candidate.getField())!.key, value: candidate.getValue() })); if (entries.length > 1) options.onValueDictionary?.(column.key, cell.getValue(), entries); else options.onValueDictionary?.(column.key, cell.getValue()); } }] : []),
         ...(options.allowRowDelete ? rowDeleteMenu(cell.getRow()) : []),
       ] : undefined) as unknown as ColumnDefinition['contextMenu'],
@@ -442,6 +443,16 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
         const dictionary = Object.hasOwn(settings.dictionary.values, column.key) ? settings.dictionary.values[column.key] : undefined;
         span.textContent = dictionary && Object.prototype.hasOwnProperty.call(dictionary, String(value)) ? dictionary[String(value)] : value !== null && typeof value === 'object' ? nestedPreview(value, options.itemColumnKeys?.includes(column.key) ? 'items' : column.key) : formatValue(value, typeOf(column), formatOf(column));
         span.title = options.itemColumnKeys?.includes(column.key) ? nestedTitle(value, 'items', key => settings.dictionary.keys[key] || key) : rawText(value);
+        // A corrected cell shows a badge; the correction and the last collected value stay apart (#36).
+        const correction = options.correction?.(cell.getRow().getData()._mvpRow, column.key);
+        if (correction) {
+          span.classList.add('mvp-grid-corrected');
+          span.title = '사용자 정정값: ' + rawText(correction.value) + '\n최근 수집값: ' + rawText(correction.source) + '\n우클릭 → 정정값 확인';
+          const badge = element('button', '정정', 'mvp-correction-mark'); badge.type = 'button';
+          badge.setAttribute('aria-label', model.label(column, settings) + ' 정정값 확인');
+          badge.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); options.onCorrection?.(cell.getRow().getData()._mvpRow, column.key); });
+          span.prepend(badge);
+        }
         if (value !== null && typeof value === 'object') {
           span.className = 'mvp-grid-nested'; span.setAttribute('role', 'button'); span.tabIndex = 0;
           span.setAttribute('aria-label', model.label(column, settings) + ' 상세 보기');
