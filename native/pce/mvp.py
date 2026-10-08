@@ -191,14 +191,23 @@ class MvpGateway:
         self.db.execute('INSERT INTO mvp_records(record_id,stage,store_version,payload,deleted_at) VALUES(?,?,?,?,?) ON CONFLICT(record_id) DO UPDATE SET store_version=excluded.store_version,payload=excluded.payload,deleted_at=excluded.deleted_at',
                         (record['recordId'], record['stage'], record['storeVersion'], dumps(record), record.get('deletedAt')))
 
-    def compare(self, observations, decisions=None):
+    def compare(self, observations, decisions=None, edits=None):
         require(isinstance(observations, list) and 0 < len(observations) <= 20000, '수집 대상이 없거나 너무 많습니다.')
+        # Values the user changed in the extraction table, one entry (or None) per observation (#24).
+        require(edits is None or isinstance(edits, list) and len(edits) == len(observations), '고친 값 형식을 확인하세요.')
         decisions = decisions or {}
-        conflicts, records, versions, seen = [], [], [], set()
+        conflicts, records, versions, seen, items = [], [], [], set(), []
         counts = {'inserted': 0, 'identical': 0, 'supplemented': 0, 'changed': 0}
         settings = loads(self.db.execute('SELECT payload FROM mvp_settings WHERE singleton=1').fetchone()[0])
-        for observation in observations:
+        for index, observation in enumerate(observations):
             validate_observation(observation, settings.get('screenRules'))
+            incoming = observation['fields']
+            change = edits[index] if edits else None
+            if change is not None:
+                require(isinstance(change, dict) and change and all(key in incoming for key in change), '고친 값은 업무 자료의 원천 열에만 넣을 수 있습니다.')
+                require(not set(change) & set(IDENTITIES[observation['stage']]), '업무키는 수정할 수 없습니다.')
+                require(not any(settings.get('columnLocks', {}).get(key) is True for key in change), '잠긴 열은 수정할 수 없습니다.', 'LOCKED')
+                incoming = {**incoming, **copy.deepcopy(change)}
             rid = record_id(observation)
             require(rid not in seen, '한 요청에 같은 업무키가 여러 번 있습니다.', 'AMBIGUOUS')
             seen.add(rid)
@@ -206,15 +215,17 @@ class MvpGateway:
             require(previous is None or not previous.get('deletedAt'), '휴지통의 자료입니다. 먼저 복원한 뒤 수집하세요.', 'TRASHED')
             versions.append((rid, previous['storeVersion'] if previous else None))
             if previous is None:
-                records.append({**copy.deepcopy(observation), 'recordId': rid, 'storeVersion': 1, 'userValues': default_user_values(observation['stage'])})
-                counts['inserted'] += 1; continue
+                records.append({**copy.deepcopy(observation), 'fields': copy.deepcopy(incoming), 'recordId': rid, 'storeVersion': 1, 'userValues': default_user_values(observation['stage'])})
+                counts['inserted'] += 1; items.append({'recordId': rid, 'status': 'inserted'}); continue
             before_conflicts = len(conflicts)
-            fields = merge_fields(previous['fields'], observation['fields'], [], rid, conflicts, decisions)
+            fields = merge_fields(previous['fields'], incoming, [], rid, conflicts, decisions)
             children = merge_children(previous['children'], observation['children'], observation['stage'], rid, conflicts, decisions)
             changed = not same(fields, previous['fields']) or not same(children, previous['children'])
-            counts['changed' if len(conflicts) > before_conflicts else 'supplemented' if changed else 'identical'] += 1
+            status = 'changed' if len(conflicts) > before_conflicts else 'supplemented' if changed else 'identical'
+            counts[status] += 1; items.append({'recordId': rid, 'status': status})
             records.append({**previous, **({'fields': fields, 'children': children, 'rawJson': observation['rawJson'], 'source': observation['source'], 'capturedAt': observation['capturedAt'], 'storeVersion': previous['storeVersion'] + 1} if changed else {})})
-        return {'token': digest({'observations': observations, 'versions': versions}), 'observations': observations, 'conflicts': conflicts, 'counts': counts}, records
+        token = {'observations': observations, 'versions': versions, **({'edits': edits} if edits is not None else {})}
+        return {'token': digest(token), 'observations': observations, 'conflicts': conflicts, 'counts': counts, 'items': items}, records
 
     def dispatch(self, command, payload):
         if command == 'mvp.health':
@@ -243,13 +254,13 @@ class MvpGateway:
                 self.save(record)
             return {'count': len(changes)}
         if command == 'mvp.preview':
-            return self.compare(payload.get('observations'))[0]
+            return self.compare(payload.get('observations'), None, payload.get('edits'))[0]
         if command == 'mvp.apply':
             choices = payload.get('decisions', [])
             require(isinstance(choices, list) and all(isinstance(c, dict) and isinstance(c.get('recordId'), str) and isinstance(c.get('field'), str) and isinstance(c.get('useIncoming'), bool) for c in choices), '충돌 선택 형식을 확인하세요.')
             decisions = {(c['recordId'], c['field']): c['useIncoming'] for c in choices}
             require(len(decisions) == len(choices), '중복 충돌 선택입니다.')
-            preview, records = self.compare(payload.get('observations'), decisions)
+            preview, records = self.compare(payload.get('observations'), decisions, payload.get('edits'))
             require(payload.get('token') == preview['token'], '자료가 바뀌었습니다. 다시 비교하세요.', 'STALE')
             expected = {(c['recordId'], c['field']) for c in preview['conflicts']}
             require(set(decisions) == expected, '각 충돌에 유지/반영을 선택하세요.')

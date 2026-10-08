@@ -237,6 +237,42 @@ class MvpTests(unittest.TestCase):
         self.assertNotIn('error', self.save([updated], choices))
         fields = self.records()[0]['fields']; self.assertEqual(fields['quantity'], 3); self.assertEqual(fields['unitPrice'], '35608652.5')
 
+    def test_preview_reports_each_item_status(self):
+        self.save([observation(number='A'), observation(number='B'), observation(number='C')])
+        supplemented = observation(number='B'); supplemented['fields']['blank'] = '보완'
+        changed = observation(number='C'); changed['fields']['quantity'] = 7
+        sources = [source_capture(value) for value in (observation(number='A'), supplemented, changed, observation(number='D'))]
+        items = self.call('mvp.preview', {'observations': sources})['result']['items']
+        self.assertEqual([item['status'] for item in items], ['identical', 'supplemented', 'changed', 'inserted'])
+        self.assertEqual([item['recordId'] for item in items], [record_id(value) for value in sources])
+
+    def test_extraction_edits_are_compared_and_saved_as_record_values(self):
+        source = source_capture(observation())
+        edits = [{'quantity': 5}]
+        preview = self.call('mvp.preview', {'observations': [source], 'edits': edits})['result']
+        self.assertEqual(preview['items'][0]['status'], 'inserted')
+        self.assertEqual(self.call('mvp.apply', {'observations': [source], 'edits': [{'quantity': 6}], 'token': preview['token'], 'decisions': []})['error']['code'], 'STALE')
+        self.assertNotIn('error', self.call('mvp.apply', {'observations': [source], 'edits': edits, 'token': preview['token'], 'decisions': []}))
+        record = self.records()[0]
+        self.assertEqual(record['fields']['quantity'], 5); self.assertEqual(record['rawJson'], source['rawJson'])
+        # The edited value now differs from the same screen value, and an edit back to the screen value conflicts with the DB.
+        self.assertEqual(self.call('mvp.preview', {'observations': [source]})['result']['items'][0]['status'], 'changed')
+        preview = self.call('mvp.preview', {'observations': [source], 'edits': [{'quantity': 5}]})['result']
+        self.assertEqual(preview['items'][0]['status'], 'identical')
+        preview = self.call('mvp.preview', {'observations': [source], 'edits': [{'quantity': 8}]})['result']
+        self.assertEqual([(c['field'], c['previous'], c['incoming']) for c in preview['conflicts']], [('quantity', 5, 8)])
+        self.assertNotIn('error', self.call('mvp.apply', {'observations': [source], 'edits': [{'quantity': 8}], 'token': preview['token'], 'decisions': [{**preview['conflicts'][0], 'useIncoming': True}]}))
+        self.assertEqual(self.records()[0]['fields']['quantity'], 8)
+
+    def test_extraction_edits_keep_identity_locks_and_shape(self):
+        source = source_capture(observation())
+        self.update_settings(columnLocks={'unitPrice': True})
+        for edits in ([{'ctrtDmndRcptNo': 'OTHER'}], [{'notInRecord': 1}], [{}], [[1]], [], [{'quantity': 1}, None]):
+            self.assertIn('error', self.call('mvp.preview', {'observations': [source], 'edits': edits}), edits)
+        self.assertEqual(self.call('mvp.preview', {'observations': [source], 'edits': [{'unitPrice': '1'}]})['error']['code'], 'LOCKED')
+        self.assertEqual(self.call('mvp.preview', {'observations': [source], 'edits': [None]})['result']['items'][0]['status'], 'inserted')
+        self.assertEqual(self.records(), [])
+
     def test_false_is_not_zero(self):
         self.save([observation()]); changed = observation(); changed['fields']['quantity'] = False
         self.assertEqual(len(self.call('mvp.preview', {'observations': [source_capture(changed)]})['result']['conflicts']), 1)
