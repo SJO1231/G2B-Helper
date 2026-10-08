@@ -16,7 +16,7 @@ const mode = params.get('mode') || 'extract';
 const tabId = Number(params.get('sourceTabId')) || undefined;
 const native = typeof chrome !== 'undefined' && !!chrome.runtime?.id;
 const stageLabels:Record<ProcurementStage,string> = {receipt:'접수',bid:'공고',contract:'계약'};
-const defaultColumnTypes:NonNullable<MvpSettings['columnTypes']>={ctrtAmt:'money',ctrtDmndAmt:'money',dlvgdsTermYmd:'date',종결금액:'money',미종결금액:'money',선금보증금액:'money',지정일:'date',선금보증기한:'date'};
+const defaultColumnTypes:NonNullable<MvpSettings['columnTypes']>={ctrtAmt:'money',ctrtDmndAmt:'money',dlvgdsTermYmd:'date',종결금액:'money',미종결금액:'money',선금보증금액:'money',지정일:'date',선금보증기한:'date','합계 금액':'money','합계 수량':'number'};
 let settings:MvpSettings = {theme:'light',extractionMode:'tables',hideEmptyColumns:true,hideUnmappedColumns:false,dictionary:{keys:{ctrtNo:'계약번호',ctrtChgOrd:'변경차수',ctrtAmt:'계약금액',dlvgdsTermYmd:'납품기한',ctrtDmndRcptNo:'접수번호',ctrtDmndRcptOrd:'차수'},values:{}},launchers:[],shortcuts:{collect:'Alt+Shift+S',document:'Alt+Shift+D'},columnTypes:{종결금액:'money',미종결금액:'money',선금보증금액:'money',지정일:'date',선금보증기한:'date'}};
 let settingsVersion=1, extraction:ExtractionResult|undefined, handle:GridRendererHandle|undefined;
 let records:ProcurementRecord[]=[], stage:ProcurementStage='receipt', activeView:ExtractionView|undefined, dirty=false, userVisible=true, isDb=mode==='db';

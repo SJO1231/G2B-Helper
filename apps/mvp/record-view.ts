@@ -1,5 +1,5 @@
 import type { JsonRow, MvpSettings, ProcurementRecord, ProcurementStage } from './contracts';
-import { contractUserColumns, withContractValues } from './user-fields';
+import { contractUserColumns, summaryColumns, withContractValues } from './user-fields';
 const derived = new Set(['지체일수','미종결금액']);
 const identityKeys={receipt:['ctrtDmndRcptNo','ctrtDmndRcptOrd'],bid:['bidPbancNo','bidPbancOrd'],contract:['ctrtNo','ctrtChgOrd']};
 
@@ -14,7 +14,9 @@ export class RecordView {
   const used=new Set(this.sourceKeys);
   const allocate=(name:string,prefix:string)=>{let key=used.has(name)?prefix+' · '+name:name;const base=key;let n=2;while(used.has(key))key=base+' '+n++;used.add(key);return key;};
   const definitions=settings.userColumns?.[stage]??records.flatMap(r=>Object.keys(r.userValues));
-  for(const name of new Set([...definitions,...(stage==='contract'?contractUserColumns:[])]))this.userNames.set(name,allocate(name,'사용자'));
+  // Summary columns appear once any record has them, even when the saved column list predates them (#30).
+  const summaries=summaryColumns.filter(name=>records.some(r=>Object.hasOwn(r.userValues,name)));
+  for(const name of new Set([...definitions,...summaries,...(stage==='contract'?contractUserColumns:[])]))this.userNames.set(name,allocate(name,'사용자'));
   for(const record of records)for(const child of record.children)if(!this.childNames.has(child.key))this.childNames.set(child.key,allocate(child.label||child.key,'표'));
   this.rawKey=allocate('원본 JSON','수집');
  }

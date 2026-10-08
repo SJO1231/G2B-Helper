@@ -301,7 +301,7 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     const onNested = vi.fn(), source = [{ items: [{ dtlsPrnmNm: '합성 품명', code: '0001', quantity: 0, flag: false }, { itemCfnm: '다른 품명' }], amount: '1.000000000000000001' }];
     const handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '품목', rows: source, settings, onNested });
     const table = state.tables[0]; table.fire('tableBuilt'); const cell = table.getRows()[0].getCell('f0'), preview = table.options.columns[0].formatter(cell);
-    expect(preview.textContent).toBe('합성 품명 외 1건'); expect(preview.title).toBe(JSON.stringify(source[0].items));
+    expect(preview.textContent).toBe('합성 품명 (전체 2개 품목)'); expect(preview.title).toBe(JSON.stringify(source[0].items));
     preview.fire('click'); expect(onNested).toHaveBeenCalledWith(source[0], 'items', source[0].items);
     expect(table.options.columns[1].hozAlign).toBe('right'); expect(handle.rows()).toEqual(source); handle.destroy();
   });
