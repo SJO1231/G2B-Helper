@@ -192,7 +192,7 @@ async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen
  if(isDb&&dirty&&!unconfirmedDocumentRequest&&!entry){
   const ids=JSON.parse(area.dataset.recordIds||'[]') as string[],chosen=(handle?.getSelectedRows()||[]).map(row=>ids[row.sourceIndex]).filter((id):id is string=>!!id);
   if(!chosen.length)throw new Error('생성할 행의 셀을 선택하세요.');
-  await saveRows();
+  generateButton.disabled=true;try{await saveRows();}finally{generateButton.disabled=false;}
   const stored=chosen.map(id=>records.find(record=>record.recordId===id)).filter((record):record is ProcurementRecord=>!!record);
   if(stored.length!==chosen.length)throw new Error('저장한 자료를 다시 찾지 못했습니다. 다시 선택하세요.');
   return generateDocuments({sourceKind:'db',items:documentItems(stored.map((record,sourceIndex)=>({sourceIndex,row:recordView!.toRow(record)})),{kind:'db',records:stored,recordIds:stored.map(record=>record.recordId),view:recordView!})});
@@ -442,7 +442,7 @@ async function documentBridge(){
 }
 function demoRecords(type:ProcurementStage):ProcurementRecord[]{const identityKeys={receipt:['ctrtDmndRcptNo','ctrtDmndRcptOrd'],bid:['bidPbancNo','bidPbancOrd'],contract:['ctrtNo','ctrtChgOrd']}[type];return Array.from({length:24},(_,i)=>({stage:type,identity:[`SAMPLE-${String(i+1).padStart(3,'0')}`,'01'],recordId:'sample-'+i,storeVersion:1,fields:{[identityKeys[0]]:`SAMPLE-${String(i+1).padStart(3,'0')}`,[identityKeys[1]]:'01',사업명:'회의실 물품 구매 '+(i+1),수량:i===0?0:i,완료:false,ctrtAmt:'35608652.5',ctrtDt:dateText(today).replaceAll('.',''),dlvgdsTermYmd:'20261027',빈열:'',비고:{검토:['규격','수량']}},children:[{key:'items',label:'물품',kind:'items',rows:[{품명:'복합기',수량:1,단가:'35608652.5'}]}],source:{url:'https://www.g2b.go.kr/',areaCd:'14',depth1:'01570',depth2:'01571',framePath:'top'},rawJson:'{"sample":true}',capturedAt:'2026-10-01T00:00:00Z',userValues:type==='contract'?{종결:i===2,지정일:'20261101',종결금액:'1000',선금보증기한:'',선금보증금액:''}:{담당:'예시'}}));}
 async function boot(){if(native){try{const response=await rpc<{settings:MvpSettings;storeVersion:number}>('mvp.settings.read',{});settings=response.settings;settingsVersion=response.storeVersion;}catch(error){fail(error);}}settings.columnTypes={...defaultColumnTypes,...settings.columnTypes};confirmedSettings=structuredClone(settings);theme();
- if(mode==='db'){stage=(params.get('stage')||'receipt') as ProcurementStage;if(!Object.hasOwn(stageLabels,stage))stage='receipt';await loadRecords(stage);if(params.get('notice')==='carried')message('이전 차수의 사용자 열 값을 가져왔습니다.');}
+ if(mode==='db'){stage=(params.get('stage')||'receipt') as ProcurementStage;if(!Object.hasOwn(stageLabels,stage))stage='receipt';await loadRecords(stage);if(params.get('notice')==='carried'){message('이전 차수의 사용자 열 값을 가져왔습니다.');const next=new URLSearchParams(location.search);next.delete('notice');history.replaceState(null,'',location.pathname+'?'+next);}}
  else if(mode==='launcher')showLauncher();else if(mode==='settings')showSettings();else{const contractDemo=demoRecords('contract'),demoView=new RecordView(contractDemo,'contract',settings);
   try{extraction=native?extractCapture(await captureCurrentPage(tabId),undefined,settings.screenRules):extractCapture({pointInfo:{areaCd:'14',depth1:'01570',depth2:'01571',depth3:'01579'},tables:{접수목록:demoRecords('receipt').map(r=>r.fields),계약목록:contractDemo.map(r=>demoView.toRow(r)),빈표:[]}},undefined,settings.screenRules);}
   catch(error){if(mode!=='document')throw error;await documentDb('현재 화면을 읽지 못했습니다. DB에서 자료를 선택하세요.');status.title+=' '+(error instanceof Error?error.message:String(error));return;}
