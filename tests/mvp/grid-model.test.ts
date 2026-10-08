@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MvpSettings } from '../../apps/mvp/contracts';
-import { GridModel, compareValues, dateColumnKeys, dateParts, editedValue, excelFormat, excelValue, exportMatrix, formatValue, matchesView, nestedPreview, parseClipboard, valueToken, type GridFilter } from '../../apps/mvp/grid-model';
+import { GridModel, compareValues, dateColumnKeys, dateParts, editedValue, excelFormat, excelValue, exportMatrix, formatValue, matchesView, nestedPreview, nestedTitle, representativeItem, parseClipboard, valueToken, type GridFilter } from '../../apps/mvp/grid-model';
 
 const settings: MvpSettings = { theme: 'light', extractionMode: 'tables', hideEmptyColumns: true, hideUnmappedColumns: false, dictionary: { keys: {}, values: {} }, launchers: [] };
 describe('MVP worksheet model (synthetic data)', () => {
@@ -45,14 +45,32 @@ describe('MVP worksheet model (synthetic data)', () => {
   it('previews a representative item name while keeping generic nested JSON and raw values untouched', () => {
     for (const name of ['dtlsPrnm', 'dtlsPrnmNm', 'itemCfnm', '품명']) {
       const items = [{ [name]: '합성 물품', quantity: 0, completed: false }, { [name]: '둘째 물품' }];
-      expect(nestedPreview(items, 'items')).toBe('합성 물품 외 1건');
+      expect(nestedPreview(items, 'items')).toBe('합성 물품 (전체 2개 품목)');
       expect(nestedPreview(items, 'other')).toBe(JSON.stringify(items));
       expect(items[0].quantity).toBe(0); expect(items[0].completed).toBe(false);
     }
-    expect(nestedPreview([{ dtlsPrnm: null }, { itemCfnm: '둘째 물품' }], 'items')).toBe('둘째 물품 외 1건');
+    expect(nestedPreview([{ dtlsPrnm: null }, { itemCfnm: '둘째 물품' }], 'items')).toBe('둘째 물품 (전체 2개 품목)');
     expect(nestedPreview([0, false, { code: '0001' }], 'items')).toBe('[0,false,{"code":"0001"}]');
     expect(nestedPreview([{ 품명: '복합기', 수량: 0, 단가: '1.000000000000000001' }], '물품')).toBe('복합기');
     expect(nestedPreview([{ 품명: '복합기' }], '품목')).toBe('복합기');
+  });
+  it('shows the representative item by amount with its quantity, unit and amount instead of 외 N건 (#30)', () => {
+    const contract = [{ ctrtItemSqno: '2', ctrtItemNm: '큰 품목', ctrtQty: '3', ctrtUntVal: '대', ctrtAmt: '1000' }, { ctrtItemSqno: '1', ctrtItemNm: '앞 순번', ctrtQty: '2', ctrtUntVal: '박스', ctrtAmt: '1,000' }, { ctrtItemSqno: '3', ctrtItemNm: '작은 품목', ctrtAmt: '5' }];
+    expect(nestedPreview(contract, 'items')).toBe('앞 순번 · 2 박스 · 1,000 (전체 3개 품목)');
+    const bid = [{ bidClsfNo: '1', bidPbancItemSqno: '2', ctrtDmndRcptItemSqno: '9', dtlsPrnmNm: '공고 품목', prchsDtlItemQty: '1', prchsDtlItemUntVal: '식', rowAmtSum: '700' }];
+    expect(nestedPreview(bid, 'items')).toBe('공고 품목 · 1 식 · 700');
+    const receipt = [{ ctrtDmndRcptItemSqno: '2', dtlsPrnm: '뒤' }, { ctrtDmndRcptItemSqno: '10', dtlsPrnm: '더 뒤' }, { ctrtDmndRcptItemSqno: '1', dtlsPrnm: '앞', ctrtDmndQty: 0 }];
+    expect(nestedPreview(receipt, 'items')).toBe('앞 · 0 (전체 3개 품목)');
+    expect(contract[0].ctrtAmt).toBe('1000');
+  });
+  it('lists every field of the representative item on hover and matches the Native order and counting rules', () => {
+    const rows = [{ ctrtItemSqno: 'B', ctrtItemNm: '글자 순번', ctrtAmt: 5 }, { ctrtItemSqno: 2, ctrtItemNm: '숫자 순번', ctrtAmt: 5, itemSpecVal: '규격 값', ctrtUprc: 5 }, { ctrtItemSqno: 2, ctrtItemNm: '숫자 순번', ctrtAmt: 5 }, { ctrtItemNm: '순번 없음', ctrtAmt: 5 }];
+    expect(representativeItem(rows)).toMatchObject({ count: 3, row: { ctrtItemNm: '숫자 순번' } });
+    expect(nestedPreview(rows, 'items')).toBe('숫자 순번 · 5 (전체 3개 품목)');
+    const title = nestedTitle(rows, 'items', key => key === 'itemSpecVal' ? '규격' : key);
+    expect(title.split('\n')).toEqual(['대표 품목', 'ctrtItemSqno: 2', 'ctrtItemNm: 숫자 순번', 'ctrtAmt: 5', '규격: 규격 값', 'ctrtUprc: 5', '전체 3개 품목 · 누르면 전체 상세']);
+    expect(nestedPreview([{ ctrtItemSqno: 1, ctrtQty: 2 }], 'items')).toBe('(품명 없음) · 2');
+    expect(nestedTitle([{ a: 1 }], 'items', key => key)).toBe(JSON.stringify([{ a: 1 }]));
   });
   it('round-trips every source key, missing field, and empty source row through safe aliases', () => {
     const source = [JSON.parse('{"":"empty key","a.b":"00123","__rowId":0,"__proto__":false,"constructor":1,"amount":1234.56789,"nested":[{"x":0}]}'), {}];

@@ -280,6 +280,69 @@ class MvpTests(unittest.TestCase):
         self.assertEqual(self.call('mvp.preview', {'observations': [source], 'edits': [None]})['result']['items'][0]['status'], 'inserted')
         self.assertEqual(self.records(), [])
 
+    def contract_with_items(self, rows, number='TEST-001'):
+        source = observation('contract', number)
+        source['children'] = [{'key': 'items', 'label': '물품', 'kind': 'items', 'rows': rows}]
+        return source
+
+    def test_item_summary_fills_user_columns_on_collection(self):
+        rows = [{'ctrtItemSqno': '2', 'ctrtItemNm': '큰 품목', 'ctrtQty': '3', 'ctrtUntVal': '대', 'ctrtAmt': '1,000'},
+                {'ctrtItemSqno': '1', 'ctrtItemNm': '같은 금액 앞 순번', 'ctrtQty': '2.5', 'ctrtUntVal': '박스', 'ctrtAmt': '1000'},
+                {'ctrtItemSqno': '3', 'ctrtItemNm': '작은 품목', 'ctrtQty': '1', 'ctrtUntVal': '개', 'ctrtAmt': '0.10'}]
+        self.save([self.contract_with_items(rows)])
+        record = self.records('contract')[0]
+        self.assertEqual({k: record['userValues'][k] for k in ('대표 품명', '대표 단위', '합계 수량', '합계 금액', '품목 수')},
+                         {'대표 품명': '같은 금액 앞 순번', '대표 단위': '박스', '합계 수량': '6.5', '합계 금액': '2000.10', '품목 수': '3'})
+        self.assertEqual(record['fields']['unitPrice'], '35608652.5')  # source fields are not touched
+        self.assertIs(record['userValues']['종결'], False)
+
+    def test_item_summary_without_amounts_and_with_unreadable_totals(self):
+        rows = [{'ctrtItemSqno': '10', 'ctrtItemNm': '뒤', 'ctrtQty': '1'}, {'ctrtItemSqno': '9', 'ctrtItemNm': '앞', 'ctrtQty': '미정'}]
+        self.save([self.contract_with_items(rows)])
+        values = self.records('contract')[0]['userValues']
+        self.assertEqual((values['대표 품명'], values['합계 수량'], values['합계 금액'], values['품목 수']), ('앞', '', '', '2'))
+
+    def test_item_summary_keeps_user_edits_and_refreshes_automatic_values(self):
+        first = [{'ctrtItemSqno': '1', 'ctrtItemNm': '하나', 'ctrtQty': '1', 'ctrtUntVal': '개', 'ctrtAmt': '100'}]
+        self.save([self.contract_with_items(first)])
+        record = self.records('contract')[0]; record['userValues']['대표 품명'] = '사용자 품명'
+        self.assertNotIn('error', self.call('mvp.edit', {'records': [record]}))
+        more = first + [{'ctrtItemSqno': '2', 'ctrtItemNm': '둘', 'ctrtQty': '4', 'ctrtUntVal': '개', 'ctrtAmt': '300'}]
+        self.save([self.contract_with_items(more)])
+        values = self.records('contract')[0]['userValues']
+        self.assertEqual((values['대표 품명'], values['합계 수량'], values['합계 금액'], values['품목 수']), ('사용자 품명', '5', '400', '2'))
+
+    def test_item_summary_fills_an_identical_record_once(self):
+        source = self.contract_with_items([{'ctrtItemSqno': '1', 'ctrtItemNm': '하나', 'ctrtQty': '1', 'ctrtAmt': '100'}])
+        self.save([source]); record = self.records('contract')[0]
+        for key in ('대표 품명', '합계 수량'): del record['userValues'][key]
+        record.pop('summaryValues')
+        self.gateway.save(record)  # a record stored before summaries existed
+        self.save([source]); refilled = self.records('contract')[0]
+        self.assertEqual((refilled['userValues']['대표 품명'], refilled['storeVersion']), ('하나', record['storeVersion'] + 1))
+        self.save([source]); self.assertEqual(self.records('contract')[0]['storeVersion'], record['storeVersion'] + 1)
+
+    def test_item_summary_uses_bid_and_receipt_keys_and_skips_records_without_items(self):
+        bid = observation('bid'); bid['children'] = [{'key': 'items', 'label': '물품', 'kind': 'items', 'rows': [
+            {'bidClsfNo': '1', 'bidPbancItemSqno': '1', 'dtlsPrnmNm': '공고 품목', 'prchsDtlItemQty': '2', 'prchsDtlItemUntVal': '대', 'rowAmtSum': '50'}]}]
+        receipt = observation('receipt'); receipt['children'] = [{'key': 'items', 'label': '물품', 'kind': 'items', 'rows': [
+            {'ctrtDmndRcptItemSqno': '1', 'dtlsPrnm': '접수 품목', 'ctrtDmndQty': '7', 'qtyUntNm': '개', 'ctrtDmndAmt': '70'}]}]
+        self.save([bid]); self.save([receipt]); self.save([observation('receipt', 'NO-ITEMS')])
+        self.assertEqual(self.records('bid')[0]['userValues']['합계 금액'], '50')
+        receipts = {r['identity'][0]: r['userValues'] for r in self.records()}
+        self.assertEqual(receipts['TEST-001']['대표 품명'], '접수 품목'); self.assertEqual(receipts['NO-ITEMS'], {})
+
+    def test_item_summary_exact_totals_integers_duplicates_and_cleared_cells(self):
+        source = observation('contract')
+        source['children'] = [
+            {'key': 'items', 'label': '물품', 'kind': 'items', 'rows': [{'ctrtItemSqno': 1, 'ctrtItemNm': '하나', 'ctrtQty': 2, 'ctrtAmt': '12345678901234567890.123456789'}, {'ctrtItemNm': '순번 없음', 'ctrtQty': 1, 'ctrtAmt': '0.000000001'}]},
+            {'key': 'itemsExcel', 'label': '물품 엑셀', 'kind': 'items', 'rows': [{'ctrtItemSqno': '1', 'ctrtItemNm': '하나', 'ctrtQty': 2, 'ctrtAmt': '12345678901234567890.123456789'}]}]
+        self.save([source]); record = self.records('contract')[0]
+        self.assertEqual((record['userValues']['합계 금액'], record['userValues']['합계 수량'], record['userValues']['품목 수']), ('12345678901234567890.123456790', '3', '2'))
+        record['userValues']['대표 품명'] = ''
+        self.assertNotIn('error', self.call('mvp.edit', {'records': [record]}))
+        self.save([source]); self.assertEqual(self.records('contract')[0]['userValues']['대표 품명'], '하나')
+
     def test_false_is_not_zero(self):
         self.save([observation()]); changed = observation(); changed['fields']['quantity'] = False
         self.assertEqual(len(self.call('mvp.preview', {'observations': [source_capture(changed)]})['result']['conflicts']), 1)
