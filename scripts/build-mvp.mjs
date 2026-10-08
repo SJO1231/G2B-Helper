@@ -2,6 +2,7 @@ import { build } from 'esbuild';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash, createPublicKey } from 'node:crypto';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const output = path.join(root, 'dist/mvp-extension');
@@ -19,8 +20,15 @@ await writeFile(path.join(output, 'main.html'), completeHtml, 'utf8');
 // Local MV3 assets only. Script bodies from the user run through userScripts.execute.
 // Source: https://developer.chrome.com/docs/extensions/reference/api/userScripts
 const g2b = ['*://g2b.go.kr/*', '*://*.g2b.go.kr/*'];
+// A fixed public key keeps one extension ID wherever the folder is loaded, so the Native Host can name it (d680ac2, #49).
+const identity = JSON.parse(await readFile(path.join(root, 'scripts/mvp-extension-key.json'), 'utf8'));
+const publicKey = Buffer.from(identity.key, 'base64');
+if (createPublicKey({ key: publicKey, type: 'spki', format: 'der' }).asymmetricKeyType !== 'rsa') throw new Error('The fixed extension key must be an RSA public key.');
+const extensionId = createHash('sha256').update(publicKey).digest('hex').slice(0, 32).replace(/[0-9a-f]/g, value => String.fromCharCode(97 + parseInt(value, 16)));
+if (extensionId !== identity.id) throw new Error('Fixed extension ID and public key disagree.');
 const manifest = {
   manifest_version: 3, name: 'G2B Helper MVP', version: '0.1.0', minimum_chrome_version: '138',
+  key: identity.key,
   description: '나라장터 현재 화면 수동 추출·Grid·SQLite 업무 보조',
   permissions: ['activeTab', 'scripting', 'nativeMessaging', 'userScripts'], host_permissions: g2b,
   background: { service_worker: 'background.js', type: 'module' }, action: { default_title: 'G2B Helper 리모컨 열기' },
