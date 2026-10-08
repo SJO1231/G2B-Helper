@@ -38,7 +38,7 @@
 .mvp-grid .mvp-grid-filter{flex:none;opacity:0;padding:0 3px;border:0;min-height:16px;background:transparent;line-height:16px;color:var(--grid-accent)}
 .mvp-grid .tabulator-col:hover .mvp-grid-filter,.mvp-grid .tabulator-col:focus-within .mvp-grid-filter,.mvp-grid .mvp-grid-filter.is-active{opacity:1}
 .mvp-grid-nested{color:var(--grid-accent);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
-.mvp-grid-panel{position:absolute;top:31px;right:6px;z-index:50;width:min(350px,calc(100% - 12px));max-height:calc(100% - 37px);overflow:auto;border:1px solid var(--grid-line);background:var(--grid-sheet);box-shadow:0 3px 10px #0002}
+.mvp-grid-panel{position:absolute;top:26px;right:6px;z-index:50;width:min(350px,calc(100% - 12px));max-height:calc(100% - 32px);overflow:auto;border:1px solid var(--grid-line);background:var(--grid-sheet);box-shadow:0 3px 10px #0002}
 .mvp-grid-panel[hidden],.mvp-grid [hidden]{display:none!important}
 .mvp-grid-panel-heading{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 8px;border-bottom:1px solid var(--grid-line);background:var(--grid-control)}
 .mvp-grid-panel-body{display:flex;flex-direction:column;gap:7px;padding:8px}
