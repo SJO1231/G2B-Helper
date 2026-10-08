@@ -7,6 +7,7 @@ export class RecordView {
  readonly sourceKeys:Set<string>;
  readonly userNames=new Map<string,string>();
  readonly childNames=new Map<string,string>();
+ readonly computedNames=new Map<string,string>();
  readonly rawKey:string;
  constructor(records:ProcurementRecord[],readonly stage:ProcurementStage,private settings:MvpSettings){
   this.sourceKeys=new Set(records.flatMap(r=>Object.keys(r.fields)));
@@ -15,21 +16,23 @@ export class RecordView {
   const definitions=settings.userColumns?.[stage]??records.flatMap(r=>Object.keys(r.userValues));
   for(const name of new Set([...definitions,...(stage==='contract'?contractUserColumns:[])]))this.userNames.set(name,allocate(name,'사용자'));
   for(const record of records)for(const child of record.children)if(!this.childNames.has(child.key))this.childNames.set(child.key,allocate(child.label||child.key,'표'));
+  for(const record of records)for(const key of Object.keys(record.computed||{}))if(!this.computedNames.has(key))this.computedNames.set(key,allocate(key,'계산'));
   this.rawKey=allocate('원본 JSON','수집');
  }
  get userKeys(){return [...this.userNames.values()];}
  // Source values are read only; only user columns are edited (user, 2026-10-09, #42).
- get readonlyKeys(){return[this.rawKey,...this.childNames.values(),...this.sourceKeys,...[...derived].map(k=>this.userNames.get(k)).filter((k):k is string=>!!k)];}
+ get readonlyKeys(){return[this.rawKey,...this.childNames.values(),...this.computedNames.values(),...this.sourceKeys,...[...derived].map(k=>this.userNames.get(k)).filter((k):k is string=>!!k)];}
  get completionKey(){return this.userNames.get('종결')||'종결';}
  toRow(record:ProcurementRecord):JsonRow{
   const row:JsonRow=Object.assign(Object.create(null),structuredClone(record.fields));
+  for(const[key,alias]of this.computedNames)row[alias]=record.computed&&Object.hasOwn(record.computed,key)?record.computed[key]:'';
   const user=this.stage==='contract'?withContractValues(record.fields,record.userValues,this.settings):record.userValues;
   for(const[name,key]of this.userNames)row[key]=Object.hasOwn(record.userValues,name)||(this.stage==='contract'&&contractUserColumns.includes(name))?user[name]:'';
   for(const child of record.children)row[this.childNames.get(child.key)!]=structuredClone(child.rows);
   row[this.rawKey]=record.rawJson;return row;
  }
  userFromRow(row:JsonRow):JsonRow{
-  const values:JsonRow=Object.create(null);const reserved=new Set([...this.sourceKeys,...this.childNames.values(),this.rawKey]);
+  const values:JsonRow=Object.create(null);const reserved=new Set([...this.sourceKeys,...this.childNames.values(),...this.computedNames.values(),this.rawKey]);
   for(const[name,key]of this.userNames)if(!derived.has(name)&&Object.hasOwn(row,key))values[name]=row[key];
   for(const[key,value]of Object.entries(row))if(!reserved.has(key)&&!this.userKeys.includes(key)&&!derived.has(key))values[key]=value;
   return values;

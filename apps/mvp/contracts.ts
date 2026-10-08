@@ -8,7 +8,8 @@ export interface ProcurementObservation {
   stage: ProcurementStage; identity: string[]; fields: JsonRow; children: NestedDataset[];
   rawJson: string; source: ScreenLocator; capturedAt: string;
 }
-export interface ProcurementRecord extends ProcurementObservation { recordId: string; storeVersion: number; userValues: JsonRow; }
+/** `computed`: Helper columns the Native host makes when read (#45); never sent back or stored. */
+export interface ProcurementRecord extends ProcurementObservation { recordId: string; storeVersion: number; userValues: JsonRow; computed?: JsonRow; }
 export interface ExtractionView { key: string; label: string; stage?: ProcurementStage; rows: JsonRow[]; source?: ScreenLocator; }
 export interface ExtractionResult { raw: unknown; views: ExtractionView[]; observations: ProcurementObservation[]; warnings: string[]; }
 /** A stored value the screen replaced on collection (#43): a source key, or ['children', key] with row counts for a child table. */
@@ -36,6 +37,8 @@ export interface GridRendererOptions {
   onDeleteRows?: (rows: JsonRow[], sourceIndices: number[]) => void;
   onUserColumnsChanged?: (keys: string[]) => void;
   onNested?: (row: JsonRow, key: string, rows: JsonRow[]) => void;
+  /** A child table cell's own text instead of its row count, by grid source index and column key. */
+  nestedLabel?: (sourceIndex: number, key: string) => string | undefined;
   /** Settings changed from the 속성 panel; `tableSettings` enables the 테이블 분류 controls (extraction only). */
   onSettings?: (changes: Partial<Pick<MvpSettings, 'hideEmptyColumns' | 'hideUnmappedColumns' | 'hideEmptyTables' | 'extractionMode'>>) => void;
   tableSettings?: boolean;
