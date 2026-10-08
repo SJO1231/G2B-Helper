@@ -60,6 +60,17 @@ class DocumentTests(unittest.TestCase):
         settings['settings']['documentProfiles'] = {'unknown': 'test'}
         self.assertIn('error', self.call('mvp.settings.save', settings))
 
+    def test_document_field_links_are_validated_per_stage_and_profile(self):
+        settings = self.gateway.dispatch('mvp.settings.read', {})
+        settings['settings']['documentLinks'] = {'contract': {'test': {'담당부서': 'dmstUntyGrpNm', '계약 금액': 'ctrtAmt'}}}
+        self.assertIn('result', self.call('mvp.settings.save', settings))
+        self.assertEqual(self.gateway.dispatch('mvp.settings.read', {})['settings']['documentLinks']['contract']['test']['담당부서'], 'dmstUntyGrpNm')
+        for links in ({'unknown': {'test': {'a': 'b'}}}, {'contract': {'test': {'a': ''}}}, {'contract': {'': {'a': 'b'}}},
+                      {'contract': {'test': ['a']}}, {'contract': {'test': {'a': 1}}}, {'contract': {'test': {str(i): 'b' for i in range(2001)}}}):
+            settings = self.gateway.dispatch('mvp.settings.read', {})
+            settings['settings']['documentLinks'] = links
+            self.assertIn('error', self.call('mvp.settings.save', settings), links if len(str(links)) < 200 else 'oversized')
+
     def test_rejects_empty_oversized_and_arbitrary_endpoint_payload(self):
         for change in ({'items': []}, {'items': self.payload['items'] * 101}, {'url': 'http://example.com'}, {'sourceKind': 'other'}):
             self.assertIn('error', self.call(payload={**self.payload, **change}))
