@@ -3,7 +3,7 @@ import { performWorkAction, type WorkActionRequest, type WorkActionResult } from
 import type { MvpEnvelope, MvpResponse } from './contracts';
 
 export const NATIVE_HOST = 'com.sjo1231.g2b_helper';
-const commands = new Set(['mvp.health', 'mvp.preview', 'mvp.apply', 'mvp.records', 'mvp.edit', 'mvp.trash', 'mvp.restore', 'mvp.settings.read', 'mvp.settings.save', 'mvp.document.profiles', 'mvp.document.generate', 'mvp.corrections.reset']);
+const commands = new Set(['mvp.health', 'mvp.preview', 'mvp.apply', 'mvp.records', 'mvp.edit', 'mvp.trash', 'mvp.restore', 'mvp.settings.read', 'mvp.settings.save', 'mvp.document.profiles', 'mvp.document.generate']);
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const failure = (error: unknown): string => error instanceof Error ? error.message : String(error);
 export function isG2bUrl(value?: string): boolean {

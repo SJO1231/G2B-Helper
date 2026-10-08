@@ -140,9 +140,9 @@ describe('MVP current-tab browser command routing', () => {
     await expect(launcherTab(api, '0', 7)).rejects.toThrow('사용자 스크립트 허용');
   });
 
-  it('forwards every MVP gateway command the pages send, including the correction reset (#36)', async () => {
+  it('forwards every MVP gateway command the pages send, and no longer the withdrawn correction reset (#42)', async () => {
     const { api } = browser(), sender = { id: api.runtime.id, url: 'chrome-extension://synthetic-extension/main.html' } as chrome.runtime.MessageSender;
-    for (const command of ['mvp.records', 'mvp.edit', 'mvp.corrections.reset', 'mvp.document.generate']) {
+    for (const command of ['mvp.records', 'mvp.edit', 'mvp.document.generate']) {
       const native = fakeNative(), request = { ...envelope, requestId: 'forward-' + command, command } as MvpEnvelope;
       const waiting = handleMvpMessage(api, native.client, { kind: 'mvp.rpc', envelope: request }, sender);
       await Promise.resolve();
@@ -151,7 +151,7 @@ describe('MVP current-tab browser command routing', () => {
       expect(await waiting).toMatchObject({ result: { ok: true } });
       native.client.dispose();
     }
-    await expect(handleMvpMessage(api, fakeNative().client, { kind: 'mvp.rpc', envelope: { ...envelope, command: 'mvp.unknown' } }, sender)).rejects.toThrow('요청 형식');
+    for (const command of ['mvp.unknown', 'mvp.corrections.reset']) await expect(handleMvpMessage(api, fakeNative().client, { kind: 'mvp.rpc', envelope: { ...envelope, command } as unknown as MvpEnvelope }, sender)).rejects.toThrow('요청 형식');
   });
 
   it('uses widget sender tab instead of a caller-supplied arbitrary tab ID', async () => {

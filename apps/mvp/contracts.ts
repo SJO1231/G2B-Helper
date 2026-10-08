@@ -8,11 +8,11 @@ export interface ProcurementObservation {
   stage: ProcurementStage; identity: string[]; fields: JsonRow; children: NestedDataset[];
   rawJson: string; source: ScreenLocator; capturedAt: string;
 }
-export interface ProcurementRecord extends ProcurementObservation { recordId: string; storeVersion: number; userValues: JsonRow; sourceFields?: JsonRow; overrides?: JsonRow; }
+export interface ProcurementRecord extends ProcurementObservation { recordId: string; storeVersion: number; userValues: JsonRow; }
 export interface ExtractionView { key: string; label: string; stage?: ProcurementStage; rows: JsonRow[]; source?: ScreenLocator; }
 export interface ExtractionResult { raw: unknown; views: ExtractionView[]; observations: ProcurementObservation[]; warnings: string[]; }
-export interface FieldConflict { recordId: string; field: string; previous: unknown; incoming: unknown; override?: unknown; }
-export interface CollectionPreview { token: string; observations: ProcurementObservation[]; conflicts: FieldConflict[]; counts: { inserted: number; identical: number; supplemented: number; changed: number }; items: { recordId: string; status: 'inserted' | 'identical' | 'supplemented' | 'changed'; carriedFrom?: string; corrections?: number }[]; }
+export interface FieldConflict { recordId: string; field: string; previous: unknown; incoming: unknown; }
+export interface CollectionPreview { token: string; observations: ProcurementObservation[]; conflicts: FieldConflict[]; counts: { inserted: number; identical: number; supplemented: number; changed: number }; items: { recordId: string; status: 'inserted' | 'identical' | 'supplemented' | 'changed'; carriedFrom?: string }[]; }
 export interface CollectionDecision { recordId: string; field: string; useIncoming: boolean; }
 export interface FieldDictionary { keys: Record<string, string>; values: Record<string, Record<string, string>>; }
 export type MvpShortcutAction = 'extract' | 'collect' | 'db' | 'document' | 'launcher';
@@ -21,7 +21,7 @@ export type MvpColumnType = keyof typeof columnTypeLabels;
 export interface MvpColumnFormat { decimals?: number; grouping?: boolean; dateFormat?: 'dot' | 'dash' | 'compact'; }
 export type GridFilter = { mode: 'values'; values: string[] } | { mode: 'exact' | 'includes' | 'exclude'; terms: string[] };
 export interface GridViewState { search: string; combine: 'and' | 'or'; filters: [string, GridFilter][]; columns: { key: string; width: number; visible: boolean }[]; sorters: { key: string; dir: 'asc' | 'desc' }[]; userColumnsVisible?: boolean; }
-export interface MvpSettings { theme: 'light' | 'dark'; extractionMode: 'tables' | 'all'; hideEmptyColumns: boolean; hideUnmappedColumns: boolean; hideEmptyTables?: boolean; dictionary: FieldDictionary; launchers: { id: string; label: string; script: string }[]; shortcuts?: Partial<Record<MvpShortcutAction,string>>; columnTypes?: Record<string,MvpColumnType>; columnFormats?: Record<string,MvpColumnFormat>; columnLocks?: Record<string,boolean>; screenRules?: CaptureScreenRule[]; userColumns?: Partial<Record<ProcurementStage,string[]>>; documentProfiles?: Partial<Record<ProcurementStage,string>>; documentLinks?: Partial<Record<ProcurementStage,Record<string,Record<string,string>>>>; }
+export interface MvpSettings { theme: 'light' | 'dark'; extractionMode: 'tables' | 'all'; hideEmptyColumns: boolean; hideUnmappedColumns: boolean; hideEmptyTables?: boolean; dictionary: FieldDictionary; launchers: { id: string; label: string; script: string }[]; shortcuts?: Partial<Record<MvpShortcutAction,string>>; columnTypes?: Record<string,MvpColumnType>; columnFormats?: Record<string,MvpColumnFormat>; screenRules?: CaptureScreenRule[]; userColumns?: Partial<Record<ProcurementStage,string[]>>; documentProfiles?: Partial<Record<ProcurementStage,string>>; documentLinks?: Partial<Record<ProcurementStage,Record<string,Record<string,string>>>>; }
 export interface GridRendererOptions {
   label: string; rows: JsonRow[]; settings: MvpSettings; readOnly?: boolean;
   userColumnKeys?: string[];
@@ -31,16 +31,12 @@ export interface GridRendererOptions {
   onRowsChanged?: (rows: JsonRow[], sourceIndices: number[]) => void; onColumnRename?: (key: string, label: string) => void;
   onColumnType?: (key: string, type: MvpColumnType) => void;
   onColumnFormat?: (key: string, format: MvpColumnFormat) => void;
-  onColumnLock?: (key: string, locked: boolean) => void;
   onNotice?: (message: string) => void;
   onValueDictionary?: (key: string, value: unknown, selection?: { key: string; value: unknown }[]) => void;
   allowRowDelete?: boolean;
   onDeleteRows?: (rows: JsonRow[], sourceIndices: number[]) => void;
   onUserColumnsChanged?: (keys: string[]) => void;
   onNested?: (row: JsonRow, key: string, rows: JsonRow[]) => void;
-  /** A user correction of a collected value, by grid source index and column key (#36). */
-  correction?: (sourceIndex: number, key: string) => { source: unknown; value: unknown } | undefined;
-  onCorrection?: (sourceIndex: number, key: string) => void;
   /** Settings changed from the 속성 panel; `tableSettings` enables the 테이블 분류 controls (extraction only). */
   onSettings?: (changes: Partial<Pick<MvpSettings, 'hideEmptyColumns' | 'hideUnmappedColumns' | 'hideEmptyTables' | 'extractionMode'>>) => void;
   tableSettings?: boolean;
@@ -56,7 +52,7 @@ export interface GridRendererHandle {
   addColumn(key: string): void; removeColumn(key: string): void; exportExcel(filename: string): void; exportCsv(filename: string): void;
   destroy(): void;
 }
-export type MvpRpcCommand = 'mvp.health' | 'mvp.preview' | 'mvp.apply' | 'mvp.records' | 'mvp.edit' | 'mvp.trash' | 'mvp.restore' | 'mvp.settings.read' | 'mvp.settings.save' | 'mvp.document.profiles' | 'mvp.document.generate' | 'mvp.corrections.reset';
+export type MvpRpcCommand = 'mvp.health' | 'mvp.preview' | 'mvp.apply' | 'mvp.records' | 'mvp.edit' | 'mvp.trash' | 'mvp.restore' | 'mvp.settings.read' | 'mvp.settings.save' | 'mvp.document.profiles' | 'mvp.document.generate';
 export interface DocumentItem { stage: ProcurementStage; identity: string[]; fields: JsonRow; userValues: JsonRow; children: NestedDataset[]; source: ScreenLocator | JsonRow; }
 export interface DocumentProfile { id: string; label: string; revisionId: number; outputDirectory: string; }
 export interface DocumentRequest { profileId: string; sourceKind: 'screen' | 'db'; items: DocumentItem[]; }

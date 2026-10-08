@@ -89,7 +89,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
       finally { table.restoreRedraw(); }
       from.pop(); to.push(edits); updateCount(); return;
     }
-    if (edits.some(edit => !table.getRow(edit.id) || !getColumn(edit.field) || !editableColumn(getColumn(edit.field)!))) { notice('잠긴 열의 편집은 실행 취소할 수 없습니다.'); return; }
+    if (edits.some(edit => !table.getRow(edit.id) || !getColumn(edit.field) || !editableColumn(getColumn(edit.field)!))) { notice('읽기 전용 열의 편집은 실행 취소할 수 없습니다.'); return; }
     replaying = true;
     try { batch(() => { for (const edit of back ? [...edits].reverse() : edits) table.getRow(edit.id).getCell(edit.field).setValue(structuredClone(back ? edit.before : edit.after)); }); from.pop(); to.push(edits); }
     finally { replaying = false; }
@@ -119,8 +119,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
   const getColumn = (field: string): GridColumn | undefined => model.columns.find(column => column.field === field);
   const typeOf = (column: GridColumn): MvpColumnType | undefined => settings.columnTypes && Object.hasOwn(settings.columnTypes, column.key) ? settings.columnTypes[column.key] : undefined;
   const formatOf = (column: GridColumn): MvpColumnFormat => settings.columnFormats && Object.hasOwn(settings.columnFormats, column.key) ? settings.columnFormats[column.key] : {};
-  const lockedColumn = (column: GridColumn): boolean => settings.columnLocks?.[column.key] === true;
-  const editableColumn = (column: GridColumn): boolean => !options.readOnly && !readOnlyKeys.has(column.key) && !lockedColumn(column);
+  const editableColumn = (column: GridColumn): boolean => !options.readOnly && !readOnlyKeys.has(column.key);
   const selected = (): CellComponent[] => table.getRanges().flatMap(range => range.getCells().flat()).filter(cell => !!getColumn(cell.getField()));
   let definitionQueue = Promise.resolve();
   const updateDefinition = (column: GridColumn, data?: JsonRow[]): void => {
@@ -348,12 +347,6 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
     updateDefinition(column);
     table.getRows().forEach(row => row.reformat()); options.onColumnType?.(column.key, type);
   }
-  function setColumnLock(column: GridColumn, locked: boolean): void {
-    if (options.readOnly || readOnlyKeys.has(column.key)) return;
-    settings.columnLocks = { ...settings.columnLocks, [column.key]: locked };
-    updateDefinition(column);
-    options.onColumnLock?.(column.key, locked);
-  }
   function addColumnDialog(): void {
     if (options.readOnly) return;
     const content = openPanel('사용자 열 추가');
@@ -384,7 +377,6 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
       { label: '열 이동·숨김 취소', action: () => replay(true) },
       { label: '속성', action: columnChooser },
       { label: '표시명 설정', action: () => renameColumn(column) },
-      { label: readOnlyKeys.has(column.key) ? '열 잠금 (읽기 전용)' : lockedColumn(column) ? '열 잠금 해제' : '열 잠금', disabled: !!options.readOnly || readOnlyKeys.has(column.key), action: () => setColumnLock(column, !lockedColumn(column)) },
       { label: '열 타입', menu: (Object.keys(columnTypeLabels) as MvpColumnType[]).map(type => ({ label: columnTypeLabels[type], action: () => setType(column, type) })) },
       { label: '열 서식', action: () => formatColumn(column) },
       { label: '자동 너비', action: () => {
@@ -401,8 +393,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
       hozAlign: ['money', 'number', 'percent'].includes(typeOf(column) || '') ? 'right' : typeOf(column) === 'boolean' ? 'center' : 'left',
       headerContextMenu: menu, editor: options.readOnly ? undefined : editCell,
       // Tabulator 6.5 loadMenuEvent accepts functions; @types 6.3 declares only arrays.
-      contextMenu: (options.onValueDictionary || options.allowRowDelete || options.onCorrection ? (_event: UIEvent, cell: CellComponent) => [
-        ...(options.correction?.(cell.getRow().getData()._mvpRow, column.key) ? [{ label: '정정값 확인', action: () => options.onCorrection?.(cell.getRow().getData()._mvpRow, column.key) }] : []),
+      contextMenu: (options.onValueDictionary || options.allowRowDelete ? (_event: UIEvent, cell: CellComponent) => [
         ...(options.onValueDictionary ? [{ label: '값 사전 추가', action: () => { const chosen = selected(),included = chosen.some(candidate => candidate.getField() === cell.getField() && candidate.getRow().getData()._mvpRow === cell.getRow().getData()._mvpRow); const entries = (included ? chosen.filter(candidate => !model.blankSlot(candidate.getRow().getData() as GridBufferRow)) : [cell]).map(candidate => ({ key: getColumn(candidate.getField())!.key, value: candidate.getValue() })); if (entries.length > 1) options.onValueDictionary?.(column.key, cell.getValue(), entries); else options.onValueDictionary?.(column.key, cell.getValue()); } }] : []),
         ...(options.allowRowDelete ? rowDeleteMenu(cell.getRow()) : []),
       ] : undefined) as unknown as ColumnDefinition['contextMenu'],
@@ -443,16 +434,6 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
         const dictionary = Object.hasOwn(settings.dictionary.values, column.key) ? settings.dictionary.values[column.key] : undefined;
         span.textContent = dictionary && Object.prototype.hasOwnProperty.call(dictionary, String(value)) ? dictionary[String(value)] : value !== null && typeof value === 'object' ? nestedPreview(value, options.itemColumnKeys?.includes(column.key) ? 'items' : column.key) : formatValue(value, typeOf(column), formatOf(column));
         span.title = options.itemColumnKeys?.includes(column.key) ? nestedTitle(value, 'items', key => settings.dictionary.keys[key] || key) : rawText(value);
-        // A corrected cell shows a badge; the correction and the last collected value stay apart (#36).
-        const correction = options.correction?.(cell.getRow().getData()._mvpRow, column.key);
-        if (correction) {
-          span.classList.add('mvp-grid-corrected');
-          span.title = '사용자 정정값: ' + rawText(correction.value) + '\n최근 수집값: ' + rawText(correction.source) + '\n우클릭 → 정정값 확인';
-          const badge = element('button', '정정', 'mvp-correction-mark'); badge.type = 'button';
-          badge.setAttribute('aria-label', model.label(column, settings) + ' 정정값 확인');
-          badge.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); options.onCorrection?.(cell.getRow().getData()._mvpRow, column.key); });
-          span.prepend(badge);
-        }
         if (value !== null && typeof value === 'object') {
           span.className = 'mvp-grid-nested'; span.setAttribute('role', 'button'); span.tabIndex = 0;
           span.setAttribute('aria-label', model.label(column, settings) + ' 상세 보기');
@@ -634,7 +615,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
     setRowFilter: predicate => { rowFilter = predicate; whenReady(applyFilter); },
     setSettings: next => {
       const hideChanged = next.hideEmptyColumns !== settings.hideEmptyColumns || next.hideUnmappedColumns !== settings.hideUnmappedColumns;
-      const columnsChanged = (['hideEmptyColumns', 'hideUnmappedColumns', 'dictionary', 'columnTypes', 'columnFormats', 'columnLocks'] as const).some(key => JSON.stringify(next[key]) !== JSON.stringify(settings[key]));
+      const columnsChanged = (['hideEmptyColumns', 'hideUnmappedColumns', 'dictionary', 'columnTypes', 'columnFormats'] as const).some(key => JSON.stringify(next[key]) !== JSON.stringify(settings[key]));
       settings = structuredClone(next); root.dataset.theme = settings.theme;
       if (!columnsChanged) return;
       whenReady(() => {

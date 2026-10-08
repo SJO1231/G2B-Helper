@@ -11,7 +11,7 @@ from contextlib import closing
 import unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from pce.mvp import MvpGateway, record_id, IDENTITIES
+from pce.mvp import MvpGateway, record_id, IDENTITIES, SCHEMA_VERSION
 from host import native_loop, response_frames
 
 def observation(stage='receipt', number='TEST-001', order='01'):
@@ -64,7 +64,6 @@ class MvpTests(unittest.TestCase):
         record = self.records('contract')[0]
         record['userValues'].update({'종결': False, '종결금액': '0.00', '메모': '보존'})
         record = self.call('mvp.edit', {'records': [record]})['result'][0]
-        self.assertNotIn('error', self.update_settings(columnLocks={'종결': True, 'quantity': True}))
         payload = {'records': [{'recordId': record['recordId'], 'storeVersion': record['storeVersion']}]}
         response = self.call('mvp.trash', payload, 'trash-once')
         self.assertEqual(response['result'], {'count': 1})
@@ -130,10 +129,11 @@ class MvpTests(unittest.TestCase):
 
     def test_settings_types_and_screen_rules_are_validated_and_persisted(self):
         rule = {'id': 'custom', 'stage': 'receipt', 'urlPattern': 'https://*.g2b.go.kr/custom*', 'areaCd': '22', 'depth1': 'C1', 'depth2': 'C2', 'depth3': ''}
-        for settings in [{'hideEmptyTables': 1}, {'columnLocks': {'quantity': 1}}, {'columnLocks': []}, {'screenRules': None}, {'screenRules': [rule, rule]}, {'screenRules': [{**rule, 'stage': 'bad'}]}, {'screenRules': [{**rule, 'depth3': False}]}, {'screenRules': [{**rule, 'urlPattern': ''}]}]:
+        for settings in [{'hideEmptyTables': 1}, {'screenRules': None}, {'screenRules': [rule, rule]}, {'screenRules': [{**rule, 'stage': 'bad'}]}, {'screenRules': [{**rule, 'depth3': False}]}, {'screenRules': [{**rule, 'urlPattern': ''}]}]:
             self.assertIn('error', self.update_settings(**settings))
-        saved = self.update_settings(hideEmptyTables=True, columnTypes={'quantity': 'money'}, columnLocks={'quantity': True, 'checked': False}, screenRules=[rule])['result']
+        saved = self.update_settings(hideEmptyTables=True, columnTypes={'quantity': 'money'}, columnLocks={'quantity': True}, screenRules=[rule])['result']
         self.assertTrue(saved['settings']['hideEmptyTables'])
+        self.assertNotIn('columnLocks', saved['settings'])  # column locks were withdrawn (#42); an old window's value is dropped
         self.gateway.close(); self.gateway = MvpGateway(self.path)
         self.assertEqual(self.call('mvp.settings.read')['result'], saved)
 
@@ -185,23 +185,27 @@ class MvpTests(unittest.TestCase):
         self.update_settings(screenRules=[rule, {**rule, 'id': 'ambiguous', 'stage': 'bid'}])
         self.assertEqual(self.call('mvp.preview', {'observations': [source]})['error']['code'], 'SCREEN')
 
-    def test_locked_zero_false_user_values_and_source_fields_are_atomic(self):
+    def test_edit_keeps_zero_false_user_values_and_rejects_source_changes_atomically(self):
+        # Source values are read only; only user columns are edited (user, 2026-10-09, #42).
         self.save([observation(number='A'), observation(number='B')])
         records = self.records()
-        records[0]['userValues'] = {'zero': 0, 'flag': False}
-        records[1]['userValues'] = {'zero': 0, 'flag': False}
+        for record in records:
+            record['userValues'] = {'zero': 0, 'flag': False}
         records = self.call('mvp.edit', {'records': records})['result']
-        self.update_settings(columnLocks={'quantity': True, 'checked': True, 'zero': True, 'flag': True, 'unlocked': False})
-        for field, value, location in [('quantity', False, 'fields'), ('checked', 0, 'fields'), ('zero', False, 'userValues'), ('flag', 0, 'userValues')]:
+        self.assertEqual([(r['userValues']['zero'], r['userValues']['flag']) for r in self.records()], [(0, False), (0, False)])
+        for field, value in [('quantity', False), ('checked', 0), ('blank', '고침'), ('ctrtDmndRcptNo', 'OTHER')]:
             changes = copy.deepcopy(records)
-            changes[0]['fields']['blank'] = 'first change'
-            changes[1][location][field] = value
-            self.assertEqual(self.call('mvp.edit', {'records': changes})['error']['code'], 'LOCKED')
+            changes[0]['userValues']['메모'] = 'first change'
+            changes[1]['fields'][field] = value
+            self.assertEqual(self.call('mvp.edit', {'records': changes})['error']['code'], 'READ_ONLY')
             self.assertEqual(self.records(), records)
-        removed = copy.deepcopy(records[0]); del removed['userValues']['zero']
-        self.assertEqual(self.call('mvp.edit', {'records': [removed]})['error']['code'], 'LOCKED')
-        allowed = copy.deepcopy(records[0]); allowed['userValues']['unlocked'] = False
-        self.assertNotIn('error', self.call('mvp.edit', {'records': [allowed]}))
+        added = copy.deepcopy(records[0]); added['fields']['new'] = 1
+        self.assertEqual(self.call('mvp.edit', {'records': [added]})['error']['code'], 'READ_ONLY')
+        unchanged = copy.deepcopy(records[0]); unchanged['userValues']['메모'] = '그대로'
+        without = copy.deepcopy(records[1]); del without['fields']; without['userValues']['메모'] = '원천 없이'
+        saved = self.call('mvp.edit', {'records': [unchanged, without]})['result']
+        self.assertEqual([r['fields'] for r in saved], [r['fields'] for r in records])
+        self.assertEqual([r['userValues']['메모'] for r in self.records()], ['그대로', '원천 없이'])
 
     def test_new_all_values_and_raw_preserved(self):
         source = observation()
@@ -246,40 +250,6 @@ class MvpTests(unittest.TestCase):
         self.assertEqual([item['status'] for item in items], ['identical', 'supplemented', 'changed', 'inserted'])
         self.assertEqual([item['recordId'] for item in items], [record_id(value) for value in sources])
 
-    def test_extraction_edits_are_compared_and_saved_as_record_values(self):
-        source = source_capture(observation())
-        edits = [{'quantity': 5}]
-        preview = self.call('mvp.preview', {'observations': [source], 'edits': edits})['result']
-        self.assertEqual(preview['items'][0]['status'], 'inserted')
-        self.assertEqual(self.call('mvp.apply', {'observations': [source], 'edits': [{'quantity': 6}], 'token': preview['token'], 'decisions': []})['error']['code'], 'STALE')
-        self.assertNotIn('error', self.call('mvp.apply', {'observations': [source], 'edits': edits, 'token': preview['token'], 'decisions': []}))
-        record = self.records()[0]
-        self.assertEqual(record['fields']['quantity'], 5); self.assertEqual(record['rawJson'], source['rawJson'])
-        # The edited value now differs from the same screen value, and an edit back to the screen value conflicts with the DB.
-        self.assertEqual(self.call('mvp.preview', {'observations': [source]})['result']['items'][0]['status'], 'changed')
-        preview = self.call('mvp.preview', {'observations': [source], 'edits': [{'quantity': 5}]})['result']
-        self.assertEqual(preview['items'][0]['status'], 'identical')
-        preview = self.call('mvp.preview', {'observations': [source], 'edits': [{'quantity': 8}]})['result']
-        self.assertEqual([(c['field'], c['previous'], c['incoming']) for c in preview['conflicts']], [('quantity', 5, 8)])
-        self.assertNotIn('error', self.call('mvp.apply', {'observations': [source], 'edits': [{'quantity': 8}], 'token': preview['token'], 'decisions': [{**preview['conflicts'][0], 'useIncoming': True}]}))
-        self.assertEqual(self.records()[0]['fields']['quantity'], 8)
-
-    def test_extraction_edit_to_empty_keeps_db_value_like_collection(self):
-        source = source_capture(observation()); self.save([observation()])
-        preview = self.call('mvp.preview', {'observations': [source], 'edits': [{'unitPrice': ''}]})['result']
-        self.assertEqual((preview['items'][0]['status'], preview['conflicts']), ('identical', []))
-        self.assertNotIn('error', self.call('mvp.apply', {'observations': [source], 'edits': [{'unitPrice': ''}], 'token': preview['token'], 'decisions': []}))
-        self.assertEqual(self.records()[0]['fields']['unitPrice'], '35608652.5')
-
-    def test_extraction_edits_keep_identity_locks_and_shape(self):
-        source = source_capture(observation())
-        self.update_settings(columnLocks={'unitPrice': True})
-        for edits in ([{'ctrtDmndRcptNo': 'OTHER'}], [{'notInRecord': 1}], [{}], [[1]], [], [{'quantity': 1}, None]):
-            self.assertIn('error', self.call('mvp.preview', {'observations': [source], 'edits': edits}), edits)
-        self.assertEqual(self.call('mvp.preview', {'observations': [source], 'edits': [{'unitPrice': '1'}]})['error']['code'], 'LOCKED')
-        self.assertEqual(self.call('mvp.preview', {'observations': [source], 'edits': [None]})['result']['items'][0]['status'], 'inserted')
-        self.assertEqual(self.records(), [])
-
     def contract_with_items(self, rows, number='TEST-001'):
         source = observation('contract', number)
         source['children'] = [{'key': 'items', 'label': '물품', 'kind': 'items', 'rows': rows}]
@@ -313,7 +283,7 @@ class MvpTests(unittest.TestCase):
         self.assertEqual(saved['settings']['userColumns'], {'contract': ['메모']})
         self.assertEqual(saved['settings']['columnTypes'], {'합계 수량': 'text', 'ctrtAmt': 'money'})  # only the old default types go
         self.assertEqual(saved['storeVersion'], settings['storeVersion'] + 2)
-        self.assertEqual(self.gateway.db.execute('PRAGMA user_version').fetchone()[0], 1)
+        self.assertEqual(self.gateway.db.execute('PRAGMA user_version').fetchone()[0], SCHEMA_VERSION)
         # A user column made later with one of the old names is kept on the next start.
         record = after['TEST-001']; record['userValues']['합계 금액'] = '사용자 값'
         self.assertNotIn('error', self.call('mvp.edit', {'records': [record]}))
@@ -380,92 +350,36 @@ class MvpTests(unittest.TestCase):
         self.assertNotIn('error', self.call('mvp.edit', {'records': [earlier]}))
         self.assertEqual(self.call('mvp.apply', {'observations': [new], 'token': preview['token'], 'decisions': []})['error']['code'], 'STALE')
 
-    def corrected(self, value='수기 단가'):
-        self.save([observation()])
-        record = self.records()[0]; record['fields']['unitPrice'] = value
-        self.assertNotIn('error', self.call('mvp.edit', {'records': [record]}))
-        return self.records()[0]
-
-    def test_edit_keeps_collected_values_apart_from_corrections(self):
-        record = self.corrected()
-        self.assertEqual((record['sourceFields']['unitPrice'], record['overrides'], record['fields']['unitPrice']), ('35608652.5', {'unitPrice': '수기 단가'}, '수기 단가'))
-
-    def test_same_screen_value_keeps_the_correction_silently(self):
-        self.corrected()
-        preview = self.call('mvp.preview', {'observations': [source_capture(observation())]})['result']
-        self.assertEqual((preview['conflicts'], preview['items'][0]['status']), ([], 'identical'))
-        self.save([observation()])
-        self.assertEqual(self.records()[0]['fields']['unitPrice'], '수기 단가')
-
-    def test_changed_screen_value_asks_and_both_answers_update_the_collected_value(self):
-        for keep in (True, False):
-            with self.subTest(keep=keep):
-                self.tearDown(); self.setUp(); self.corrected()
-                changed = observation(); changed['fields']['unitPrice'] = '40000000'; changed['fields']['quantity'] = 3
-                source = source_capture(changed)
-                preview = self.call('mvp.preview', {'observations': [source]})['result']
-                conflicts = {c['field']: c for c in preview['conflicts']}
-                self.assertEqual(conflicts['unitPrice']['override'], '수기 단가'); self.assertNotIn('override', conflicts['quantity'])
-                self.assertEqual((preview['items'][0]['status'], preview['items'][0]['corrections']), ('changed', 1))
-                decisions = [{'recordId': c['recordId'], 'field': c['field'], 'useIncoming': c['field'] == 'quantity' or not keep} for c in preview['conflicts']]
-                self.assertNotIn('error', self.call('mvp.apply', {'observations': [source], 'token': preview['token'], 'decisions': decisions}))
-                record = self.records()[0]
-                self.assertEqual(record['sourceFields']['unitPrice'], '40000000')
-                self.assertEqual(record['fields']['unitPrice'], '수기 단가' if keep else '40000000')
-                self.assertEqual(record['overrides'], {'unitPrice': '수기 단가'} if keep else {})
-                again = self.call('mvp.preview', {'observations': [source]})['result']
-                self.assertEqual(again['conflicts'], [])  # the same screen value no longer asks
-
-    def test_only_corrected_cells_differing_is_not_a_difference(self):
-        self.corrected()
-        changed = observation(); changed['fields']['unitPrice'] = '1'
-        item = self.call('mvp.preview', {'observations': [source_capture(changed)]})['result']['items'][0]
-        self.assertEqual((item['status'], item['corrections']), ('supplemented', 1))
-
-    def test_correction_edge_cases(self):
-        self.corrected()
-        blank = observation(); blank['fields']['unitPrice'] = ''
-        self.assertEqual(self.call('mvp.preview', {'observations': [source_capture(blank)]})['result']['conflicts'], [])  # an empty screen value keeps both
-        same_as_correction = observation(); same_as_correction['fields']['unitPrice'] = '수기 단가'
-        preview = self.call('mvp.preview', {'observations': [source_capture(same_as_correction)]})['result']
-        self.assertEqual(preview['conflicts'], [])
-        self.save([same_as_correction])
-        record = self.records()[0]
-        self.assertEqual((record['sourceFields']['unitPrice'], record['overrides'], record['fields']['unitPrice']), ('수기 단가', {}, '수기 단가'))
-        changed = observation(); changed['fields']['unitPrice'] = '1'
-        record['fields']['unitPrice'] = '다시 수기'; self.call('mvp.edit', {'records': [record]})
-        source = source_capture(changed); preview = self.call('mvp.preview', {'observations': [source]})['result']
-        self.assertEqual(self.call('mvp.apply', {'observations': [source], 'token': preview['token'], 'decisions': []})['error']['code'], 'VALIDATION')  # the correction question must be answered
-
-    def test_legacy_record_edit_and_reset_guards(self):
-        self.save([observation()]); legacy = self.records()[0]
-        legacy.pop('sourceFields'); legacy.pop('overrides'); legacy['fields']['blank'] = '예전에 고친 값'; self.gateway.save(legacy)
-        record = self.records()[0]; record['fields']['quantity'] = 7
-        self.assertNotIn('error', self.call('mvp.edit', {'records': [record]}))
-        record = self.records()[0]
-        self.assertEqual((record['overrides'], record['sourceFields']['blank']), ({'quantity': 7}, '예전에 고친 값'))
-        self.update_settings(columnLocks={'quantity': True})
-        locked = self.call('mvp.corrections.reset', {'records': [{'recordId': record['recordId'], 'storeVersion': record['storeVersion'], 'fields': ['quantity']}]})
-        self.assertEqual(locked['error']['code'], 'LOCKED')
-        self.update_settings(columnLocks={})
-        self.call('mvp.trash', {'records': [{'recordId': record['recordId'], 'storeVersion': record['storeVersion']}]})
+    def test_withdrawn_corrections_and_locks_are_removed_once(self):
+        self.save([observation(number='A'), observation(number='B'), observation(number='C')])
+        stored = {r['identity'][0]: r for r in self.records()}
+        corrected = stored['A']; corrected['sourceFields'] = copy.deepcopy(corrected['fields']); corrected['overrides'] = {'unitPrice': '수기 단가'}; corrected['fields']['unitPrice'] = '수기 단가'
+        self.gateway.save(corrected)
+        clean = stored['B']; clean['sourceFields'] = copy.deepcopy(clean['fields']); clean['overrides'] = {}
+        self.gateway.save(clean)
+        plain = stored['C']
+        self.call('mvp.trash', {'records': [{'recordId': clean['recordId'], 'storeVersion': clean['storeVersion']}]})
+        settings = self.call('mvp.settings.read')['result']
+        self.gateway.db.execute('UPDATE mvp_settings SET payload=? WHERE singleton=1', (json.dumps({**settings['settings'], 'columnLocks': {'unitPrice': True}}, ensure_ascii=False),))
+        self.gateway.db.execute('PRAGMA user_version=1')  # a database written before #42
+        self.gateway.close(); self.gateway = MvpGateway(self.path)
+        after = {r['identity'][0]: r for r in self.records()}
+        self.assertEqual(after['A']['fields']['unitPrice'], '35608652.5')  # the collected value (당초값) comes back
+        self.assertEqual(after['A']['storeVersion'], corrected['storeVersion'] + 1)
+        self.assertFalse({'sourceFields', 'overrides'} & set(after['A']))
         trashed = self.call('mvp.records', {'stage': 'receipt', 'trashed': True})['result'][0]
-        self.assertEqual(self.call('mvp.corrections.reset', {'records': [{'recordId': trashed['recordId'], 'storeVersion': trashed['storeVersion'], 'fields': ['quantity']}]})['error']['code'], 'TRASHED')
+        self.assertFalse({'sourceFields', 'overrides'} & set(trashed)); self.assertTrue(trashed['deletedAt'])
+        self.assertEqual(after['C'], plain)
+        read = self.call('mvp.settings.read')['result']
+        self.assertNotIn('columnLocks', read['settings']); self.assertEqual(read['storeVersion'], settings['storeVersion'] + 1)
+        self.assertEqual(self.gateway.db.execute('PRAGMA user_version').fetchone()[0], SCHEMA_VERSION)
+        self.assertEqual(self.call('mvp.corrections.reset', {'records': []})['error']['code'], 'COMMAND')
 
-    def test_new_order_starts_with_collected_values_and_no_corrections(self):
-        self.corrected()
-        self.save([observation(order='02')])
-        record = {r['identity'][1]: r for r in self.records()}['02']
-        self.assertEqual((record['overrides'], record['sourceFields']['unitPrice']), ({}, '35608652.5'))
-
-    def test_corrections_reset_uses_the_collected_value(self):
-        record = self.corrected()
-        reset = self.call('mvp.corrections.reset', {'records': [{'recordId': record['recordId'], 'storeVersion': record['storeVersion'], 'fields': ['unitPrice']}]})
-        self.assertNotIn('error', reset)
+    def test_new_records_keep_no_correction_copies(self):
+        self.save([observation()]); changed = observation(); changed['fields']['unitPrice'] = '1'
+        self.save([changed], [{'recordId': record_id(changed), 'field': 'unitPrice', 'useIncoming': True}])
         record = self.records()[0]
-        self.assertEqual((record['fields']['unitPrice'], record['overrides']), ('35608652.5', {}))
-        for change in ({'fields': ['ctrtDmndRcptNo']}, {'fields': ['missing']}, {'fields': []}, {'storeVersion': -1}):
-            self.assertIn('error', self.call('mvp.corrections.reset', {'records': [{'recordId': record['recordId'], 'storeVersion': record['storeVersion'], 'fields': ['unitPrice'], **change}]}))
+        self.assertEqual(record['fields']['unitPrice'], '1'); self.assertFalse({'sourceFields', 'overrides'} & set(record))
 
     def test_false_is_not_zero(self):
         self.save([observation()]); changed = observation(); changed['fields']['quantity'] = False
@@ -475,7 +389,7 @@ class MvpTests(unittest.TestCase):
         source = observation(); self.save([source]); updated = observation(); updated['fields']['blank'] = '보완'
         updated = source_capture(updated)
         preview = self.call('mvp.preview', {'observations': [updated]})['result']
-        record = self.records()[0]; record['fields']['blank'] = '다른 창'
+        record = self.records()[0]; record['userValues']['메모'] = '다른 창'
         self.call('mvp.edit', {'records': [record]})
         result = self.call('mvp.apply', {'observations': [updated], 'token': preview['token'], 'decisions': []})
         self.assertEqual(result['error']['code'], 'STALE')
@@ -491,9 +405,9 @@ class MvpTests(unittest.TestCase):
 
     def test_edit_failure_rolls_back_first_row(self):
         self.save([observation(number='A'), observation(number='B')]); rows = self.records()
-        rows[0]['fields']['blank'] = '첫 행'; rows[1]['storeVersion'] = -1
+        rows[0]['userValues']['메모'] = '첫 행'; rows[1]['storeVersion'] = -1
         self.assertEqual(self.call('mvp.edit', {'records': rows})['error']['code'], 'STALE')
-        self.assertEqual(self.records()[0]['fields']['blank'], '')
+        self.assertNotIn('메모', self.records()[0]['userValues'])
 
     def test_request_replay_once_and_changed_id_rejected(self):
         source = observation(); preview = self.call('mvp.preview', {'observations': [source]})['result']
@@ -604,7 +518,7 @@ class MvpTests(unittest.TestCase):
         source = observation('contract', '0', 'false'); source['fields']['ctrtNo'] = 0; source['fields']['ctrtChgOrd'] = False
         self.assertNotIn('error', self.save([source])); record = self.records('contract')[0]
         self.assertEqual(record['identity'], ['0', 'false']); self.assertIs(record['fields']['ctrtChgOrd'], False)
-        record['fields']['ctrtNo'] = '0'; self.assertEqual(self.call('mvp.edit', {'records': [record]})['error']['code'], 'VALIDATION')
+        record['fields']['ctrtNo'] = '0'; self.assertEqual(self.call('mvp.edit', {'records': [record]})['error']['code'], 'READ_ONLY')
 
     def test_native_loop_large_unicode_database_round_trip(self):
         source = observation(); source['fields']['large'] = '한글🙂' * 100000; self.save([source])
@@ -629,7 +543,7 @@ class MvpTests(unittest.TestCase):
 
     def test_empty_user_column_definition_and_rows_save_atomically(self):
         self.save([observation()]); record = self.records()[0]; before = self.call('mvp.settings.read')['result']
-        record['fields']['blank'] = '변경'; record['userValues']['빈 사용자 열'] = ''
+        record['userValues']['메모'] = '변경'; record['userValues']['빈 사용자 열'] = ''
         result = self.call('mvp.edit', {'records': [record], 'userColumns': {'stage': 'receipt', 'keys': ['빈 사용자 열'], 'settingsStoreVersion': before['storeVersion']}})
         self.assertNotIn('error', result); self.assertIsInstance(result['result'], list); self.assertEqual(result['result'][0]['storeVersion'], 2)
         settings = self.call('mvp.settings.read')['result']
@@ -637,7 +551,7 @@ class MvpTests(unittest.TestCase):
         expected = copy.deepcopy(before['settings']); expected['userColumns']['receipt'] = ['빈 사용자 열']; self.assertEqual(settings['settings'], expected)
         self.gateway.close(); self.gateway = MvpGateway(self.path)
         self.assertEqual(self.call('mvp.settings.read')['result']['settings']['userColumns']['receipt'], ['빈 사용자 열'])
-        self.assertEqual(self.records()[0]['fields']['blank'], '변경'); self.assertEqual(self.records()[0]['userValues']['빈 사용자 열'], '')
+        self.assertEqual(self.records()[0]['userValues']['메모'], '변경'); self.assertEqual(self.records()[0]['userValues']['빈 사용자 열'], '')
 
     def test_zero_rows_column_definition_saves_and_can_clear_keys(self):
         self.assertEqual(self.call('mvp.edit', {'records': []})['error']['code'], 'VALIDATION')
@@ -650,19 +564,19 @@ class MvpTests(unittest.TestCase):
 
     def test_stale_column_metadata_rolls_back_row_changes(self):
         self.save([observation()]); record = self.records()[0]; before = self.call('mvp.settings.read')['result']
-        changed = copy.deepcopy(record); changed['fields']['blank'] = '되돌려야 함'
+        changed = copy.deepcopy(record); changed['userValues']['메모'] = '되돌려야 함'
         result = self.call('mvp.edit', {'records': [changed], 'userColumns': {'stage': 'receipt', 'keys': ['실패 열'], 'settingsStoreVersion': before['storeVersion'] - 1}})
         self.assertEqual(result['error']['code'], 'STALE'); self.assertEqual(self.records()[0], record); self.assertEqual(self.call('mvp.settings.read')['result'], before)
 
     def test_stale_row_rolls_back_metadata_and_prior_row(self):
         self.save([observation(number='A'), observation(number='B')]); before_rows = self.records(); before = self.call('mvp.settings.read')['result']
-        changed = copy.deepcopy(before_rows); changed[0]['fields']['blank'] = '첫 행'; changed[1]['storeVersion'] = -1
+        changed = copy.deepcopy(before_rows); changed[0]['userValues']['메모'] = '첫 행'; changed[1]['storeVersion'] = -1
         result = self.call('mvp.edit', {'records': changed, 'userColumns': {'stage': 'receipt', 'keys': ['실패 열'], 'settingsStoreVersion': before['storeVersion']}})
         self.assertEqual(result['error']['code'], 'STALE'); self.assertEqual(self.records(), before_rows); self.assertEqual(self.call('mvp.settings.read')['result'], before)
 
     def test_column_metadata_rejects_mixed_stage_and_invalid_types(self):
         self.save([observation(), observation('contract')]); before = self.call('mvp.settings.read')['result']; receipt = self.records()[0]; contract = self.records('contract')[0]
-        changed = copy.deepcopy(receipt); changed['fields']['blank'] = '첫 행'
+        changed = copy.deepcopy(receipt); changed['userValues']['메모'] = '첫 행'
         metadata = {'stage': 'receipt', 'keys': ['사용자 열'], 'settingsStoreVersion': before['storeVersion']}
         result = self.call('mvp.edit', {'records': [changed, contract], 'userColumns': metadata})
         self.assertEqual(result['error']['code'], 'VALIDATION'); self.assertEqual(self.records()[0], receipt); self.assertEqual(self.call('mvp.settings.read')['result'], before)
