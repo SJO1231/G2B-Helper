@@ -666,6 +666,8 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
     }),
     addColumn: key => {
       if (options.readOnly || disposed) return;
+      // A user column may not share a name with a source key of this table or its label (user, 2026-10-09, #47).
+      if (key.trim() && model.columns.some(column => !column.user && (column.key === key || model.label(column, settings) === key))) throw new Error('원천 키나 라벨과 겹치는 이름은 쓸 수 없습니다: ' + key);
       const column = model.addColumn(key);
       undo.length = redo.length = 0;
       whenReady(() => { void table.addColumn(definition(column)).then(() => {

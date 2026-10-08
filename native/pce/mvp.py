@@ -407,6 +407,16 @@ class MvpGateway:
             remove = column_change.get('removeValues', []) if column_change is not None else []
             require(isinstance(remove, list) and all(isinstance(name, str) for name in remove), '값을 지울 사용자 열을 확인하세요.')
             remove = set(remove)
+            if column_change is not None:
+                # New user column names may not be a source key of the stage or a label (user, 2026-10-09, #47).
+                current = loads(self.db.execute('SELECT payload FROM mvp_settings WHERE singleton=1').fetchone()[0])
+                # Names already in use stay usable: saved definitions, the stage's default columns and names records already hold.
+                held = {row[0] for row in self.db.execute("SELECT DISTINCT value.key FROM mvp_records, json_each(mvp_records.payload, '$.userValues') AS value WHERE mvp_records.stage=?", (column_change['stage'],))}
+                added = [name for name in column_change['keys'] if name not in current.get('userColumns', {}).get(column_change['stage'], []) and name not in held and name not in default_user_values(column_change['stage']) and name not in DERIVED_USER_FIELDS]
+                taken = {row[0] for row in self.db.execute("SELECT DISTINCT field.key FROM mvp_records, json_each(mvp_records.payload, '$.fields') AS field WHERE mvp_records.stage=?", (column_change['stage'],))} if added else set()
+                dictionary = current.get('dictionary', {}).get('keys', {})
+                taken |= {dictionary[key] for key in taken if dictionary.get(key)}  # the labels of those keys
+                require(not [name for name in added if name in taken], '원천 키나 라벨과 겹치는 사용자 열 이름은 쓸 수 없습니다.')
             fixed = set(CONTRACT_USER_DEFAULTS) | DERIVED_USER_FIELDS if column_change and column_change['stage'] == 'contract' else set()
             require(not remove & set(column_change['keys'] if column_change else []) and not remove & fixed, '정의된 사용자 열이나 계약 기본 열의 값은 지울 수 없습니다.')
             require(isinstance(changes, list) and (changes or column_change is not None), '저장할 행이 없습니다.')

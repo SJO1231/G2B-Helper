@@ -90,6 +90,8 @@ const textFilter = async (title, mode, terms) => {
   await mainGrid().getByLabel('검색값 목록', { exact: true }).fill(terms);
   await mainGrid().locator('.mvp-grid-panel').getByRole('button', { name: '적용', exact: true }).click();
 };
+// 원본 JSON lives in the settings' 백업 line (#47).
+const openRaw = async () => { await page.locator('.shell > .titlebar').getByRole('button', { name: '설정', exact: true }).click(); await page.locator('dialog[open]').getByRole('button', { name: '원본 JSON', exact: true }).click(); await expect(page.locator('dialog[open] .raw-view')).toBeVisible(); };
 const clearFilters = () => page.locator('.shell > .tabs').getByRole('button', { name: '필터 해제', exact: true }).click();
 const openProperties = () => mainGrid().getByRole('button', { name: '속성', exact: true }).click();
 const addUserColumn = async () => { await openProperties(); await mainGrid().locator('.mvp-grid-panel').getByRole('button', { name: '사용자 열 추가', exact: true }).click(); };
@@ -134,8 +136,10 @@ try {
     await expect(await cell('(빈 키)')).toHaveText('0'); await expect(await cell('a.b')).toHaveText('00001'); await expect(await cell('__prefixed')).toHaveText('false');
     await expect(await cell('amount')).toHaveText('12345678901234567890.123456789');
     assert.equal(await (await header('blank')).isVisible(), false);
-    const saved = JSON.parse(await fsp.readFile(await download('source-tables.json', 'JSON'), 'utf8'));
+    await openRaw(); const saved = JSON.parse(await page.locator('dialog[open] .raw-view').textContent());
     assert.deepEqual(saved.tables['합성 표'], fixture.tables['합성 표']); assert.deepEqual(saved.tables['빈 표'], []);
+    await page.locator('dialog[open] .titlebar').getByRole('button', { name: '닫기', exact: true }).click();
+    await expect(page.locator('.shell > .toolbar').getByRole('button', { name: 'JSON', exact: true })).toHaveCount(0);
   });
   await check('nested array click opens the same GridRenderer with primitive false/zero detail rows', async () => {
     await (await cell('nested')).locator('.mvp-grid-nested').click();
@@ -217,7 +221,7 @@ try {
     const matrix = XLSX.utils.sheet_to_json(excel.Sheets['자료'], { header: 1 }); assert.ok(matrix[0].includes('코드 표시')); assert.equal(matrix.length, 2); assert.ok(matrix[1].includes('0002')); assert.ok(matrix[1].includes(1234.56789)); assert.ok(matrix[1].includes(true));
     await page.getByLabel('검색', { exact: true }).fill('');
     const csv = await fsp.readFile(await download('raw-values.csv', 'CSV'), 'utf8'); assert.ok(csv.includes('0002') && csv.includes('1234.56789'));
-    await page.getByRole('button', { name: '원본 JSON', exact: true }).click(); const dialog = page.locator('dialog[open]');
+    await openRaw(); const dialog = page.locator('dialog[open]');
     const raw = JSON.parse(await dialog.locator('.raw-view').textContent()); assert.deepEqual(raw, fixture);
     await dialog.locator('.titlebar').getByRole('button', { name: '닫기', exact: true }).click();
   });
@@ -268,11 +272,13 @@ try {
     await (await header('메모')).click({ button: 'right' }); await mainGrid().locator('.tabulator-menu').getByText('사용자 열 삭제', { exact: true }).click();
     await selectWithoutEditing('담당'); await page.evaluate(() => navigator.clipboard.writeText('0008\r\n')); await page.keyboard.press('Control+v'); await expect(await cell('담당')).toHaveText('0008');
   });
-  await check('sorting changes display order while persisted row buffers retain record input order', async () => {
+  await check('sorting changes display order while a selected row still maps to its own record', async () => {
     await goto('mode=db&stage=contract'); const sort = (await header('계약번호')).locator('.tabulator-col-sorter'); await sort.click(); await sort.click();
     await expect(await cell('계약번호')).toHaveText('SAMPLE-024');
-    const saved = JSON.parse(await fsp.readFile(await download('contract-order.json', 'JSON'), 'utf8'));
-    assert.equal(saved[0].ctrtNo, 'SAMPLE-001'); assert.equal(saved[23].ctrtNo, 'SAMPLE-024');
+    // Saving and generation map grid source indices to record IDs; the generation list shows that mapping for the selected row.
+    await (await cell('계약번호')).click(); await page.locator('.shell > .toolbar').getByRole('button', { name: '생성', exact: true }).click();
+    const listed = page.locator('dialog[open] .document-candidates'); await expect(listed).toContainText('SAMPLE-024'); await expect(listed).not.toContainText('SAMPLE-001');
+    await page.locator('dialog[open] .titlebar').getByRole('button', { name: '닫기', exact: true }).click();
   });
   await check('date window +/-1 year selects full calendar year and reapplies the selected source date', async () => {
     await goto('mode=db&stage=contract'); await (await header('ctrtDt')).click({button:'right'}); await mainGrid().locator('.tabulator-menu').getByText('열 타입',{exact:true}).click(); await mainGrid().getByText('날짜',{exact:true}).click(); await page.getByLabel('날짜 기준').selectOption('ctrtDt'); const start = page.getByLabel('시작일'), end = page.getByLabel('종료일'), before = [await start.inputValue(), await end.inputValue()];
@@ -306,7 +312,7 @@ try {
     await page.getByLabel('JSON 열기', { exact: true }).setInputFiles(filepath);
     await expect(page.locator('.shell > .tabs > .tab-list > button')).toHaveCount(Object.keys(raw.tables).length);
     const metadata = await validateProvidedTables(raw.tables);
-    await page.getByRole('button', { name: '원본 JSON', exact: true }).click();
+    await openRaw();
     const displayed = JSON.parse(await page.locator('dialog[open] .raw-view').textContent());
     const digest = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex'); assert.equal(digest(displayed), digest(raw), 'Raw JSON content hash mismatch');
     await page.locator('dialog[open] .titlebar').getByRole('button', { name: '닫기', exact: true }).click();

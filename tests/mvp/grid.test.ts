@@ -286,6 +286,12 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     const box = rows[0].children[1].children[0] as any; expect([box.checked, rows[0].children[1].children[1].textContent]).toEqual([true, '출력 제외']);
     box.checked = false; box.fire('change'); expect(onOutput).toHaveBeenCalledWith('code', true); handle.destroy();
   });
+  it('refuses a user column named like a source key or a label (#47)', () => {
+    const handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '이름', rows: [{ code: '1' }], settings: { ...settings, dictionary: { keys: { code: '코드 표시', other: '다른 표시' }, values: {} } } });
+    state.tables[0].fire('tableBuilt');
+    expect(() => handle.addColumn('code')).toThrow('겹치는'); expect(() => handle.addColumn('코드 표시')).toThrow('겹치는');
+    expect(() => handle.addColumn('다른 표시')).not.toThrow(); handle.destroy(); // a label of a key the table lacks
+  });
   it('shows table settings disabled outside extraction and adds no column settings without a handler', () => {
     const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: 'DB', rows: [{ code: '001' }], settings, onSettings: vi.fn() });
     const table = state.tables[0]; table.fire('tableBuilt'); table.options.rowHeader.titleFormatter().fire('click');
