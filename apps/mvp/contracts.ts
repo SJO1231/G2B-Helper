@@ -11,9 +11,9 @@ export interface ProcurementObservation {
 export interface ProcurementRecord extends ProcurementObservation { recordId: string; storeVersion: number; userValues: JsonRow; }
 export interface ExtractionView { key: string; label: string; stage?: ProcurementStage; rows: JsonRow[]; source?: ScreenLocator; }
 export interface ExtractionResult { raw: unknown; views: ExtractionView[]; observations: ProcurementObservation[]; warnings: string[]; }
-export interface FieldConflict { recordId: string; field: string; previous: unknown; incoming: unknown; }
-export interface CollectionPreview { token: string; observations: ProcurementObservation[]; conflicts: FieldConflict[]; counts: { inserted: number; identical: number; supplemented: number; changed: number }; items: { recordId: string; status: 'inserted' | 'identical' | 'supplemented' | 'changed'; carriedFrom?: string }[]; }
-export interface CollectionDecision { recordId: string; field: string; useIncoming: boolean; }
+/** A stored value the screen replaced on collection (#43): a source key, or ['children', key] with row counts for a child table. */
+export interface FieldChange { recordId: string; field: string; previous: unknown; incoming: unknown; }
+export interface CollectionPreview { token: string; observations: ProcurementObservation[]; changes: FieldChange[]; counts: { inserted: number; identical: number; supplemented: number; changed: number }; items: { recordId: string; status: 'inserted' | 'identical' | 'supplemented' | 'changed'; carriedFrom?: string }[]; }
 export interface FieldDictionary { keys: Record<string, string>; values: Record<string, Record<string, string>>; }
 export type MvpShortcutAction = 'extract' | 'collect' | 'db' | 'document' | 'launcher';
 export const columnTypeLabels = { text: '텍스트', number: '숫자', money: '금액', percent: '백분율', date: '날짜', datetime: '날짜·시간', boolean: '체크값' } as const;
