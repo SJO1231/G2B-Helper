@@ -432,8 +432,9 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
       formatter: cell => {
         const value = cell.getValue(), span = element('span');
         const dictionary = Object.hasOwn(settings.dictionary.values, column.key) ? settings.dictionary.values[column.key] : undefined;
-        span.textContent = dictionary && Object.prototype.hasOwnProperty.call(dictionary, String(value)) ? dictionary[String(value)] : value !== null && typeof value === 'object' ? options.nestedLabel?.(cell.getRow().getData()._mvpRow, column.key) || nestedPreview(value) : formatValue(value, typeOf(column), formatOf(column));
-        span.title = Array.isArray(value) ? '눌러서 표 보기' : rawText(value);
+        const label = value !== null && typeof value === 'object' ? options.nestedLabel?.(cell.getRow().getData()._mvpRow, column.key) : undefined;
+        span.textContent = dictionary && Object.prototype.hasOwnProperty.call(dictionary, String(value)) ? dictionary[String(value)] : value !== null && typeof value === 'object' ? label || nestedPreview(value) : formatValue(value, typeOf(column), formatOf(column));
+        span.title = label || (Array.isArray(value) ? '눌러서 표 보기' : rawText(value));
         if (value !== null && typeof value === 'object') {
           span.className = 'mvp-grid-nested'; span.setAttribute('role', 'button'); span.tabIndex = 0;
           span.setAttribute('aria-label', model.label(column, settings) + ' 상세 보기');

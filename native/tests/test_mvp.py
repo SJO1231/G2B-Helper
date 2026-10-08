@@ -494,6 +494,13 @@ class MvpTests(unittest.TestCase):
         record['userValues']['메모'] = '편집'; saved = self.call('mvp.edit', {'records': [record]})['result'][0]
         self.assertNotIn('computed', saved)  # an edit sent with the read values stores none of them
 
+    def test_limit_groups_follow_their_first_appearance(self):
+        from pce.mvp import computed_values
+        rows = [{'lmtGupSqno': '1', 'bidLmtUntyNm': 'A', 'bidLmtUntyCd': '1'}, {'lmtGupSqno': '2', 'bidLmtUntyNm': 'B', 'bidLmtUntyCd': '2'}, {'lmtGupSqno': '1', 'bidLmtUntyNm': 'C', 'bidLmtUntyCd': '3'}]
+        record = {'stage': 'bid', 'fields': {}, 'children': [{'key': '자격제한', 'rows': rows}]}
+        self.assertEqual(computed_values(record), {'업종제한': '[A(1)와 C(3)] 업종 또는 [B(2)] 업종'})
+        self.assertEqual(computed_values({**record, 'stage': 'contract', 'children': [{'key': '수요기관', 'rows': [{'deptNm': '부서'}]}]}), {})  # contracts take no contact columns
+
     def test_lcns_limit_flag_gets_a_label_once(self):
         self.assertEqual(self.call('mvp.settings.read')['result']['settings']['dictionary']['keys']['lcnsLmtYn'], '업종제한 여부')
         current = self.call('mvp.settings.read')['result']; del current['settings']['dictionary']['keys']['lcnsLmtYn']
