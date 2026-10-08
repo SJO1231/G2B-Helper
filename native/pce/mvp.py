@@ -315,6 +315,8 @@ class MvpGateway:
                     versions.append((earlier['recordId'], earlier['storeVersion']))
                     values, automatic, carried = carried_user_values(observation['stage'], earlier)
                     user = {**user, **values}
+                    # Carried automatic totals stay when the new order has no items: that is carried data too.
+                    carried = carried or (any(not absent(value) for value in automatic.values()) and item_summary(observation['stage'], observation['children']) is None)
                 records.append(with_item_summary({**copy.deepcopy(observation), 'fields': copy.deepcopy(incoming), 'sourceFields': copy.deepcopy(incoming), 'overrides': {}, 'recordId': rid, 'storeVersion': 1, 'userValues': user, **({'summaryValues': automatic} if automatic else {})}))
                 counts['inserted'] += 1; items.append({'recordId': rid, 'status': 'inserted', **({'carriedFrom': earlier['identity'][1]} if carried else {})}); continue
             before_conflicts = len(conflicts)

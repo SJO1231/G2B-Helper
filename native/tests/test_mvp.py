@@ -399,6 +399,16 @@ class MvpTests(unittest.TestCase):
         values = {r['identity'][1]: r['userValues'] for r in self.records('contract')}['02']
         self.assertEqual((values['대표 품명'], values['합계 금액']), ('사용자 대표', '30'))  # the user edit stays, automatic totals refresh
 
+    def test_carried_automatic_totals_without_new_items_are_announced(self):
+        source = self.contract_with_items([{'ctrtItemSqno': '1', 'ctrtItemNm': '앞 차수', 'ctrtQty': '1', 'ctrtAmt': '10'}])
+        source['identity'][1] = '00'; source['fields']['ctrtChgOrd'] = '00'
+        self.save([source])
+        bare = observation('contract'); bare['identity'][1] = '01'; bare['fields']['ctrtChgOrd'] = '01'
+        self.assertEqual(self.call('mvp.preview', {'observations': [source_capture(bare)]})['result']['items'][0].get('carriedFrom'), '00')
+        with_items = self.contract_with_items([{'ctrtItemSqno': '1', 'ctrtItemNm': '새 품목', 'ctrtQty': '2', 'ctrtAmt': '20'}])
+        with_items['identity'][1] = '01'; with_items['fields']['ctrtChgOrd'] = '01'
+        self.assertNotIn('carriedFrom', self.call('mvp.preview', {'observations': [source_capture(with_items)]})['result']['items'][0])
+
     def test_previous_order_change_between_preview_and_apply_is_stale(self):
         self.save([observation(order='00')])
         new = source_capture(observation(order='01'))
