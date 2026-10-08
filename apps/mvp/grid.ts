@@ -296,7 +296,13 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
         const name = element('span', model.label(column, settings)); name.append(element('small', column.key || '(빈 키)'));
         line.title = '우클릭: 키 사전 추가';
         line.addEventListener('contextmenu', event => { event.preventDefault(); event.stopPropagation(); renameColumn(column, '키 사전 추가'); });
-        line.append(check, name); list.append(line);
+        line.append(check, name);
+        const output = options.output?.(column.key);
+        if (output === undefined) { list.append(line); continue; }
+        // '출력 제외' is apart from showing: hiding a column or filtering never changes what documents get (user, 2026-10-09, #46).
+        const row = element('div', undefined, 'mvp-grid-choice-row'), exclude = labelledInput(model.label(column, settings) + ' 출력 제외', 'checkbox'), toggle = element('label', undefined, 'mvp-grid-output');
+        exclude.checked = !output; exclude.addEventListener('change', () => options.onOutput?.(column.key, !exclude.checked));
+        toggle.title = '문서에 넣지 않습니다'; toggle.append(exclude, element('span', '출력 제외')); row.append(line, toggle); list.append(row);
       }
     };
     search.addEventListener('input', draw);

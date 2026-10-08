@@ -15,8 +15,8 @@ export function documentItems(selected:{sourceIndex:number;row:JsonRow}[], conte
   if(context.kind==='db'){
    const record=context.records.find(r=>r.recordId===context.recordIds[sourceIndex]);
    if(!record)throw new Error('선택한 업무 자료가 바뀌었습니다. 다시 선택하세요.');
-   const snapshot=context.view.toEdit(record,row);
-   return structuredClone({stage:record.stage,identity:record.identity,fields:snapshot.fields,userValues:snapshot.userValues,children:record.children,source:record.source});
+   const snapshot=context.view.toEdit(record,row),userValues=context.view.definedUserValues(snapshot.userValues);
+   return structuredClone({stage:record.stage,identity:record.identity,fields:snapshot.fields,userValues,computed:{...record.computed,...context.view.derivedValues(record.fields,userValues)},children:record.children,source:record.source});
   }
   const keys={receipt:['ctrtDmndRcptNo','ctrtDmndRcptOrd'],bid:['bidPbancNo','bidPbancOrd'],contract:['ctrtNo','ctrtChgOrd']}[context.stage];
   return structuredClone({stage:context.stage,identity:keys.map(key=>String(row[key]??'')),fields:row,userValues:{},children:[],source:{...context.view.source,tableKey:context.view.key,tableLabel:context.view.label}});

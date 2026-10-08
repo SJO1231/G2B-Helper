@@ -48,6 +48,7 @@
 .mvp-grid-choices{overflow:auto;max-height:190px;border:1px solid var(--grid-line)}
 .mvp-grid-check{display:flex;align-items:center;gap:6px;min-height:24px;padding:2px 5px;cursor:pointer}
 .mvp-grid-check:hover{background:var(--grid-control)}
+.mvp-grid-choice-row{display:flex;align-items:center;gap:4px}.mvp-grid-choice-row>.mvp-grid-check{flex:1;min-width:0}.mvp-grid-output{display:flex;align-items:center;gap:3px;font-size:11px;white-space:nowrap;padding-right:4px;cursor:pointer}
 .mvp-grid-check input{accent-color:var(--grid-accent);flex:none}
 .mvp-grid-check>span{overflow-wrap:anywhere}
 .mvp-grid-check small{display:block;font-size:10px;color:var(--grid-muted)}

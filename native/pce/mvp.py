@@ -403,6 +403,12 @@ class MvpGateway:
                 require(isinstance(column_change, dict) and isinstance(column_change.get('stage'), str) and column_change['stage'] in IDENTITIES, '사용자 열의 업무를 확인하세요.')
                 require(valid_user_column_keys(column_change.get('keys')), '사용자 열 이름은 중복 없는 문자열 목록이어야 합니다.')
                 require(type(column_change.get('settingsStoreVersion')) is int, '설정 버전은 정수여야 합니다.')
+            # Values of removed user columns the user chose to delete with the definition (user, 2026-10-09, #46).
+            remove = column_change.get('removeValues', []) if column_change is not None else []
+            require(isinstance(remove, list) and all(isinstance(name, str) for name in remove), '값을 지울 사용자 열을 확인하세요.')
+            remove = set(remove)
+            fixed = set(CONTRACT_USER_DEFAULTS) | DERIVED_USER_FIELDS if column_change and column_change['stage'] == 'contract' else set()
+            require(not remove & set(column_change['keys'] if column_change else []) and not remove & fixed, '정의된 사용자 열이나 계약 기본 열의 값은 지울 수 없습니다.')
             require(isinstance(changes, list) and (changes or column_change is not None), '저장할 행이 없습니다.')
             require(all(isinstance(c, dict) for c in changes), '수정 행이 객체여야 합니다.')
             require(len({c.get('recordId') for c in changes if isinstance(c, dict)}) == len(changes), '수정 행이 중복되었습니다.')
@@ -425,6 +431,7 @@ class MvpGateway:
                     user = {**default_user_values('contract'), **user}
                 else:
                     require('종결' not in user, '종결은 계약에만 있습니다.')
+                user = {key: value for key, value in user.items() if key not in remove}
                 record = {**previous, 'userValues': user, 'storeVersion': previous['storeVersion'] + 1}
                 self.save(record); records.append(record)
             if column_change is not None:
@@ -433,6 +440,10 @@ class MvpGateway:
                 cursor = self.db.execute('UPDATE mvp_settings SET store_version=store_version+1,payload=? WHERE singleton=1 AND store_version=?',
                                          (dumps(settings), column_change['settingsStoreVersion']))
                 require(cursor.rowcount == 1, '사용자 열 설정이 다른 창에서 바뀌었습니다. 입력을 유지하고 재조회하세요.', 'STALE')
+                for (stored,) in self.db.execute('SELECT payload FROM mvp_records WHERE stage=?', (column_change['stage'],)).fetchall() if remove else []:
+                    record = loads(stored)
+                    if remove & set(record['userValues']):
+                        self.save({**record, 'userValues': {key: value for key, value in record['userValues'].items() if key not in remove}, 'storeVersion': record['storeVersion'] + 1})
             return records
         if command == 'mvp.settings.read':
             row = self.db.execute('SELECT store_version,payload FROM mvp_settings').fetchone()
@@ -454,6 +465,7 @@ class MvpGateway:
                     and ('decimals' not in value or type(value['decimals']) is int and 0 <= value['decimals'] <= 20)
                     and ('grouping' not in value or type(value['grouping']) is bool)
                     and ('dateFormat' not in value or isinstance(value['dateFormat'], str) and value['dateFormat'] in ('dot', 'dash', 'compact')) for value in formats.values()), '열 서식을 확인하세요.')
+            require(isinstance(settings.get('outputColumns', {}), dict) and all(isinstance(key, str) and type(value) is bool for key, value in settings.get('outputColumns', {}).items()), '출력 열 설정을 확인하세요.')
             settings.pop('columnLocks', None)  # column locks were withdrawn (#42); a window opened before that may still send them
             require('screenRules' not in settings or valid_screen_rules(settings['screenRules']), '수집 화면 규칙을 확인하세요.')
             require(isinstance(settings.get('documentProfiles', {}), dict) and all(k in IDENTITIES and isinstance(v, str) and 0 < len(v) <= 200 for k, v in settings.get('documentProfiles', {}).items()), '업무별 문서 서식을 확인하세요.')

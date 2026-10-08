@@ -277,6 +277,15 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     const range = tablePane.children[1].children[1]; range.value = 'all'; range.fire('change'); expect(onSettings).toHaveBeenLastCalledWith({ extractionMode: 'all' });
     handle.destroy();
   });
+  it('puts a 출력 제외 box beside each column the page gives an output state, apart from showing (#46)', () => {
+    const parent = new FakeElement(), onOutput = vi.fn();
+    const handle = renderGrid(parent as unknown as HTMLElement, { label: '출력', rows: [{ code: '001', raw: 'x' }], settings, output: key => key === 'code' ? false : undefined, onOutput });
+    const table = state.tables[0]; table.fire('tableBuilt'); table.options.rowHeader.titleFormatter().fire('click');
+    const find = (node: FakeElement, name: string): FakeElement[] => [...(String(node.className || '').split(' ').includes(name) ? [node] : []), ...node.children.flatMap(child => find(child, name))];
+    const rows = find(parent, 'mvp-grid-choice-row'); expect(rows).toHaveLength(1);
+    const box = rows[0].children[1].children[0] as any; expect([box.checked, rows[0].children[1].children[1].textContent]).toEqual([true, '출력 제외']);
+    box.checked = false; box.fire('change'); expect(onOutput).toHaveBeenCalledWith('code', true); handle.destroy();
+  });
   it('shows table settings disabled outside extraction and adds no column settings without a handler', () => {
     const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: 'DB', rows: [{ code: '001' }], settings, onSettings: vi.fn() });
     const table = state.tables[0]; table.fire('tableBuilt'); table.options.rowHeader.titleFormatter().fire('click');
