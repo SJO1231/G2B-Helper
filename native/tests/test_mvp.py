@@ -543,6 +543,20 @@ class MvpTests(unittest.TestCase):
         self.assertEqual(trashed['userValues'], {'남김': '둠'})
         self.assertEqual(after['A']['storeVersion'], edited['storeVersion'])  # the edited row is not bumped twice
 
+    def test_new_user_column_names_may_not_be_source_keys_or_labels(self):
+        self.save([observation()]); settings = self.call('mvp.settings.read')['result']
+        label = settings['settings']['dictionary']['keys']['ctrtDmndRcptNo']
+        self.assertEqual(settings['settings']['dictionary']['keys']['memo'], '메모')  # a label of a key these records lack stays free
+        column = lambda keys, version: {'stage': 'receipt', 'keys': keys, 'settingsStoreVersion': version}
+        for name in ('quantity', label):
+            self.assertEqual(self.call('mvp.edit', {'records': [], 'userColumns': column([name], settings['storeVersion'])})['error']['code'], 'VALIDATION')
+        self.assertNotIn('error', self.call('mvp.edit', {'records': [], 'userColumns': column(['메모'], settings['storeVersion'])}))
+        # A name defined before this rule stays usable; only new names are checked.
+        current = self.call('mvp.settings.read')['result']; current['settings']['userColumns'] = {'receipt': ['확인 열', 'quantity']}
+        self.assertNotIn('error', self.call('mvp.settings.save', current))
+        version = self.call('mvp.settings.read')['result']['storeVersion']
+        self.assertNotIn('error', self.call('mvp.edit', {'records': [], 'userColumns': column(['확인 열', 'quantity'], version)}))
+
     def test_user_completion_survives_collection(self):
         source = observation('contract'); self.save([source]); record = self.records('contract')[0]
         self.assertIs(record['userValues']['종결'], False)
