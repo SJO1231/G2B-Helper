@@ -306,6 +306,12 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     preview.fire('click'); expect(onNested).toHaveBeenCalledWith(source[0], 'items', source[0].items);
     expect(table.options.columns[1].hozAlign).toBe('right'); expect(handle.rows()).toEqual(source); handle.destroy();
   });
+  it('lets the page give a child table cell its own text (#45)', () => {
+    const handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '자격', rows: [{ limits: [{ a: 1 }] }, { limits: [{ a: 2 }] }], settings, nestedLabel: (index, key) => index === 0 && key === 'limits' ? '[업종A(1)] 업종' : undefined });
+    const table = state.tables[0]; table.fire('tableBuilt');
+    const first = table.options.columns[0].formatter(table.getRows()[0].getCell('f0')); expect([first.textContent, first.title]).toEqual(['[업종A(1)] 업종', '[업종A(1)] 업종']);
+    expect(table.options.columns[0].formatter(table.getRows()[1].getCell('f0')).textContent).toBe('표 1줄'); handle.destroy();
+  });
   it('single-click selects a cell without editing; F2 opens editing and typing replaces the value', () => {
     const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: '편집', rows: [{ code: '001' }], settings });
     const table = state.tables[0]; table.fire('tableBuilt');

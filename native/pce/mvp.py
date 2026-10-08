@@ -41,7 +41,7 @@ def valid_document_links(links):
 
 def default_settings():
     return {'theme': 'light', 'extractionMode': 'tables', 'hideEmptyColumns': True, 'hideUnmappedColumns': False, 'hideEmptyTables': False,
-            'dictionary': {'keys': DEFAULTS['KEY_LABELS'], 'values': DEFAULTS['CODE_SEED']}, 'launchers': [],
+            'dictionary': {'keys': {**DEFAULTS['KEY_LABELS'], **EXTRA_LABELS}, 'values': DEFAULTS['CODE_SEED']}, 'launchers': [],
             'shortcuts': {'collect': 'Alt+Shift+S', 'document': 'Alt+Shift+D'}, 'columnTypes': {}, 'userColumns': {}}
 
 def same(left, right):
@@ -159,7 +159,8 @@ def merge_children(previous, incoming, rid, changes):
 # The representative item and total columns of #30 were withdrawn (user, 2026-10-09, #41); their stored values are removed once.
 WITHDRAWN_SUMMARY_COLUMNS = ('대표 품명', '대표 단위', '합계 수량', '합계 금액', '품목 수')
 WITHDRAWN_SUMMARY_TYPES = {'합계 금액': 'money', '합계 수량': 'number'}
-SCHEMA_VERSION = 3  # PRAGMA user_version: 1 = summary columns removed (#41), 2 = corrections and locks removed (#42), 3 = child tables named (#44)
+SCHEMA_VERSION = 4  # PRAGMA user_version: 1 = summary columns removed (#41), 2 = corrections and locks removed (#42), 3 = child tables named (#44), 4 = lcnsLmtYn label (#45)
+EXTRA_LABELS = {'lcnsLmtYn': '업종제한 여부'}  # labelled for output instead of a new column (user, 2026-10-09, #45)
 
 # Child tables get names instead of screen IDs (user, 2026-10-09, #44): items are '물품', these by the last part of the
 # screen ID, any other table by that last part. Attachment tables are dropped (the raw JSON keeps them), and so is every
@@ -185,6 +186,26 @@ def named_children(stage, children):
         used.add(unique)
         named.append({**child, 'key': unique, 'label': unique})
     return named
+
+# Contact columns from the first row of the 수요기관 table, under their own keys, when the main values lack them (#45).
+CONTACT_KEYS = {'bid': ('deptNm', 'picNm', 'tlphNo', 'eml', 'dmstPicId'), 'receipt': ('deptNm', 'eml', 'dmstPicId'), 'contract': ()}
+
+def computed_values(record):
+    """Helper columns made when read and never stored (user, 2026-10-09, #45)."""
+    tables, values = {child['key']: child['rows'] for child in record['children']}, {}
+    text = lambda value: '' if absent(value) else str(value)
+    groups = {}
+    for row in tables.get('자격제한', []) if record['stage'] == 'bid' else []:
+        name, code = text(row.get('bidLmtUntyNm')), text(row.get('bidLmtUntyCd'))
+        if name or code:
+            groups.setdefault(text(row.get('lmtGupSqno')), []).append(name + ('(' + code + ')' if code else ''))
+    if groups:
+        values['업종제한'] = ' 또는 '.join('[' + '와 '.join(items) + '] 업종' for items in groups.values())  # user's example: [업종B(코드)와 업종C(코드)] 업종
+    first = (tables.get('수요기관') or [{}])[0]
+    for key in CONTACT_KEYS[record['stage']]:
+        if key not in record['fields'] and not absent(first.get(key)):
+            values[key] = first[key]
+    return values
 
 def order_key(order):
     """Business order numbers compare as numbers when they are ASCII digits ('9' < '10'); other orders follow as text."""
@@ -229,6 +250,12 @@ class MvpGateway:
                 self.drop_corrections_and_locks()
             if version < 3:
                 self.name_child_tables()
+            if version < 4:
+                settings = loads(self.db.execute('SELECT payload FROM mvp_settings WHERE singleton=1').fetchone()[0])
+                keys = settings.setdefault('dictionary', {}).setdefault('keys', {})
+                if any(key not in keys for key in EXTRA_LABELS):
+                    settings['dictionary']['keys'] = {**EXTRA_LABELS, **keys}
+                    self.db.execute('UPDATE mvp_settings SET store_version=store_version+1,payload=? WHERE singleton=1', (dumps(settings),))
             self.db.execute('PRAGMA user_version=%d' % SCHEMA_VERSION)
             self.db.execute('COMMIT')
         except Exception:
@@ -342,7 +369,7 @@ class MvpGateway:
             require(payload.get('stage') in IDENTITIES, '업무 종류를 확인하세요.')
             require('trashed' not in payload or type(payload['trashed']) is bool, '휴지통 조회는 체크값이어야 합니다.')
             query = 'SELECT payload FROM mvp_records WHERE stage=? AND deleted_at IS ' + ('NOT NULL' if payload.get('trashed', False) else 'NULL') + ' ORDER BY record_id'
-            return [loads(row[0]) for row in self.db.execute(query, (payload['stage'],))]
+            return [{**record, **({'computed': values} if (values := computed_values(record)) else {})} for record in (loads(row[0]) for row in self.db.execute(query, (payload['stage'],)))]
         if command in ('mvp.trash', 'mvp.restore'):
             changes = payload.get('records')
             require(isinstance(changes, list) and 0 < len(changes) <= 20000, '이동할 행이 없거나 너무 많습니다.')

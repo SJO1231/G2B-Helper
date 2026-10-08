@@ -476,6 +476,42 @@ class MvpTests(unittest.TestCase):
         self.gateway.close(); self.gateway = MvpGateway(self.path)
         self.assertEqual(self.records('contract')[0]['storeVersion'], after['storeVersion'])
 
+    def test_helper_columns_are_made_when_read_and_never_stored(self):
+        # The 업종제한 sentence and the 수요기관 contact values (user, 2026-10-09, #45).
+        bid = observation('bid'); bid['fields']['picNm'] = '메인 이름'  # a main value of the same key wins
+        bid['children'] = [
+            {'key': 'mf_t_itemTabs1_body_wframe6_grdAliasDmTtl06List', 'label': 'x', 'kind': 'other', 'rows': [{'CHK': False, 'deptNm': '부서', 'picNm': '이름', 'tlphNo': '000', 'eml': 'a@x', 'dmstPicId': 'id'}, {'deptNm': '둘째'}]},
+            {'key': 'mf_t_wframe7_grdAliasDmTtl07LeftList', 'label': 'x', 'kind': 'qualification', 'rows': [
+                {'lmtGupSqno': '1', 'bidLmtUntyNm': '업종A', 'bidLmtUntyCd': '0001'}, {'lmtGupSqno': '2', 'bidLmtUntyNm': '업종B', 'bidLmtUntyCd': '0002'},
+                {'lmtGupSqno': '2', 'bidLmtUntyNm': '업종C', 'bidLmtUntyCd': '0003'}, {'lmtGupSqno': '2', 'bidLmtUntyNm': '업종D', 'bidLmtUntyCd': ''}]}]
+        self.save([bid]); record = self.records('bid')[0]
+        self.assertEqual(record['computed'], {'업종제한': '[업종A(0001)] 업종 또는 [업종B(0002)와 업종C(0003)와 업종D] 업종', 'deptNm': '부서', 'tlphNo': '000', 'eml': 'a@x', 'dmstPicId': 'id'})
+        self.assertNotIn('computed', json.loads(self.gateway.db.execute("SELECT payload FROM mvp_records WHERE stage='bid'").fetchone()[0]))
+        receipt = observation('receipt'); receipt['children'] = [{'key': 'mf_c_gvCtrtDmndDmstPic', 'label': 'x', 'kind': 'other', 'rows': [{'deptNm': '접수 부서', 'picNm': '이름', 'tlphNo': '1', 'eml': 'r@x', 'dmstPicId': 'rid'}]}]
+        contract = observation('contract'); contract['children'] = [{'key': 'mf_c_grdEtpsLst', 'label': 'x', 'kind': 'other', 'rows': [{'deptNm': '업체 부서'}]}]
+        self.save([receipt]); self.save([contract])
+        self.assertEqual((self.records()[0]['computed'], self.records('contract')[0].get('computed')), ({'deptNm': '접수 부서', 'eml': 'r@x', 'dmstPicId': 'rid'}, None))  # nothing to show, no key
+        record['userValues']['메모'] = '편집'; saved = self.call('mvp.edit', {'records': [record]})['result'][0]
+        self.assertNotIn('computed', saved)  # an edit sent with the read values stores none of them
+
+    def test_limit_groups_follow_their_first_appearance(self):
+        from pce.mvp import computed_values
+        rows = [{'lmtGupSqno': '1', 'bidLmtUntyNm': 'A', 'bidLmtUntyCd': '1'}, {'lmtGupSqno': '2', 'bidLmtUntyNm': 'B', 'bidLmtUntyCd': '2'}, {'lmtGupSqno': '1', 'bidLmtUntyNm': 'C', 'bidLmtUntyCd': '3'}]
+        record = {'stage': 'bid', 'fields': {}, 'children': [{'key': '자격제한', 'rows': rows}]}
+        self.assertEqual(computed_values(record), {'업종제한': '[A(1)와 C(3)] 업종 또는 [B(2)] 업종'})
+        self.assertEqual(computed_values({**record, 'stage': 'contract', 'children': [{'key': '수요기관', 'rows': [{'deptNm': '부서'}]}]}), {})  # contracts take no contact columns
+
+    def test_lcns_limit_flag_gets_a_label_once(self):
+        self.assertEqual(self.call('mvp.settings.read')['result']['settings']['dictionary']['keys']['lcnsLmtYn'], '업종제한 여부')
+        current = self.call('mvp.settings.read')['result']; del current['settings']['dictionary']['keys']['lcnsLmtYn']
+        self.assertNotIn('error', self.call('mvp.settings.save', current))
+        self.gateway.db.execute('PRAGMA user_version=3'); self.gateway.close(); self.gateway = MvpGateway(self.path)
+        self.assertEqual(self.call('mvp.settings.read')['result']['settings']['dictionary']['keys']['lcnsLmtYn'], '업종제한 여부')
+        current = self.call('mvp.settings.read')['result']; current['settings']['dictionary']['keys']['lcnsLmtYn'] = '사용자 라벨'
+        self.assertNotIn('error', self.call('mvp.settings.save', current))
+        self.gateway.db.execute('PRAGMA user_version=3'); self.gateway.close(); self.gateway = MvpGateway(self.path)
+        self.assertEqual(self.call('mvp.settings.read')['result']['settings']['dictionary']['keys']['lcnsLmtYn'], '사용자 라벨')
+
     def test_user_completion_survives_collection(self):
         source = observation('contract'); self.save([source]); record = self.records('contract')[0]
         self.assertIs(record['userValues']['종결'], False)
