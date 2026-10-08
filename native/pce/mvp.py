@@ -5,6 +5,7 @@ import sqlite3
 import threading
 import re
 from datetime import datetime, timezone
+from decimal import Decimal
 from urllib.parse import urlparse
 from .model import Fault, require, dumps, loads, digest, empty
 from .dictionary_seed import DEFAULTS
@@ -161,6 +162,63 @@ def merge_children(previous, incoming, stage, rid, conflicts, decisions):
                 old['rows'].append(copy.deepcopy(row))
     return merged
 
+# Item keys per stage, checked against real screen captures (#30): name, quantity, unit, amount, order.
+ITEM_SUMMARY = {'receipt': ('dtlsPrnm', 'ctrtDmndQty', 'qtyUntNm', 'ctrtDmndAmt', ['ctrtDmndRcptItemSqno']),
+                'bid': ('dtlsPrnmNm', 'prchsDtlItemQty', 'prchsDtlItemUntVal', 'rowAmtSum', ['bidClsfNo', 'bidPbancItemSqno']),
+                'contract': ('ctrtItemNm', 'ctrtQty', 'ctrtUntVal', 'ctrtAmt', ['ctrtItemSqno'])}
+
+def decimal_of(value):
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return None
+    text = str(value).strip()
+    if not re.fullmatch(r'[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?', text):
+        return None
+    return Decimal(text.replace(',', ''))
+
+def item_summary(stage, children):
+    """Representative item by amount (ties: lower order; no amount: lowest order) and exact totals (user, 2026-10-07, #30)."""
+    name, quantity, unit, amount, order = ITEM_SUMMARY[stage]
+    rows, seen = [], set()
+    for child in children:
+        if child.get('kind') != 'items':
+            continue
+        for row in child['rows']:
+            key = dumps([row.get(k) for k in order]) if all(not absent(row.get(k)) for k in order) else None
+            if key is not None and key in seen:
+                continue
+            seen.add(key)
+            rows.append(row)
+    if not rows:
+        return None
+    def position(row):
+        return tuple((0, decimal_of(row.get(k)), '') if decimal_of(row.get(k)) is not None else (1, Decimal(0), str(row.get(k))) if not absent(row.get(k)) else (2, Decimal(0), '') for k in order)
+    ordered = sorted(rows, key=position)
+    representative = ordered[0]
+    for row in ordered:
+        value, best = decimal_of(row.get(amount)), decimal_of(representative.get(amount))
+        if value is not None and (best is None or value > best):
+            representative = row
+    def total(key):
+        values = [decimal_of(row.get(key)) for row in rows]
+        return '' if any(value is None for value in values) else format(sum(values, Decimal(0)), 'f')
+    text = lambda value: '' if absent(value) else str(value)
+    return {'대표 품명': text(representative.get(name)), '대표 단위': text(representative.get(unit)),
+            '합계 수량': total(quantity), '합계 금액': total(amount), '품목 수': str(len(rows))}
+
+def with_item_summary(record):
+    """Fill the summary user columns when empty or still holding the last automatic value; user edits stay."""
+    summary = item_summary(record['stage'], record['children'])
+    if summary is None:
+        return record
+    previous = record.get('summaryValues', {})
+    user = dict(record['userValues'])
+    for key, value in summary.items():
+        if absent(user.get(key)) or (key in previous and same(user.get(key), previous[key])):
+            user[key] = value
+    if same(user, record['userValues']) and same(summary, previous):
+        return record
+    return {**record, 'userValues': user, 'summaryValues': summary}
+
 class MvpGateway:
     def __init__(self, filename):
         from pathlib import Path
@@ -215,7 +273,7 @@ class MvpGateway:
             require(previous is None or not previous.get('deletedAt'), '휴지통의 자료입니다. 먼저 복원한 뒤 수집하세요.', 'TRASHED')
             versions.append((rid, previous['storeVersion'] if previous else None))
             if previous is None:
-                records.append({**copy.deepcopy(observation), 'fields': copy.deepcopy(incoming), 'recordId': rid, 'storeVersion': 1, 'userValues': default_user_values(observation['stage'])})
+                records.append(with_item_summary({**copy.deepcopy(observation), 'fields': copy.deepcopy(incoming), 'recordId': rid, 'storeVersion': 1, 'userValues': default_user_values(observation['stage'])}))
                 counts['inserted'] += 1; items.append({'recordId': rid, 'status': 'inserted'}); continue
             before_conflicts = len(conflicts)
             fields = merge_fields(previous['fields'], incoming, [], rid, conflicts, decisions)
@@ -223,7 +281,9 @@ class MvpGateway:
             changed = not same(fields, previous['fields']) or not same(children, previous['children'])
             status = 'changed' if len(conflicts) > before_conflicts else 'supplemented' if changed else 'identical'
             counts[status] += 1; items.append({'recordId': rid, 'status': status})
-            records.append({**previous, **({'fields': fields, 'children': children, 'rawJson': observation['rawJson'], 'source': observation['source'], 'capturedAt': observation['capturedAt'], 'storeVersion': previous['storeVersion'] + 1} if changed else {})})
+            merged = {**previous, **({'fields': fields, 'children': children, 'rawJson': observation['rawJson'], 'source': observation['source'], 'capturedAt': observation['capturedAt'], 'storeVersion': previous['storeVersion'] + 1} if changed else {})}
+            summarized = with_item_summary(merged)
+            records.append({**summarized, 'storeVersion': previous['storeVersion'] + 1} if summarized is not merged and not changed else summarized)
         token = {'observations': observations, 'versions': versions, **({'edits': edits} if edits is not None else {})}
         return {'token': digest(token), 'observations': observations, 'conflicts': conflicts, 'counts': counts, 'items': items}, records
 

@@ -2,6 +2,8 @@ import Decimal from 'decimal.js';
 import type { JsonRow, MvpSettings } from './contracts';
 
 export const contractUserColumns = ['종결', '지정일', '지체일수', '종결금액', '미종결금액', '선금보증기한', '선금보증금액'];
+/** Representative item and bundle totals the Native host fills on collection (#30); editable user columns. */
+export const summaryColumns = ['대표 품명', '대표 단위', '합계 수량', '합계 금액', '품목 수'];
 type ContractSettings = MvpSettings & { contractEndField?: string; contractAmountField?: string };
 const defaults: JsonRow = { 종결: false, 지정일: '', 종결금액: '', 선금보증기한: '', 선금보증금액: '' };
 

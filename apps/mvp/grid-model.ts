@@ -12,18 +12,35 @@ export const choiceText = (value: unknown): string => value === undefined ? '(�
 const own = (object: object, key: string): boolean => Object.prototype.hasOwnProperty.call(object, key);
 export const dateColumnKeys = (rows: JsonRow[], settings: MvpSettings): string[] => [...new Set(rows.flatMap(Object.keys))].filter(key => own(settings.columnTypes || {}, key) && ['date', 'datetime'].includes(settings.columnTypes![key]));
 
-/** Item names are a preview only; the nested value remains available unchanged. */
+/** Item keys per stage, the same table the Native host uses for the stored summary (#30). */
+const itemKeys = [
+  { name: 'ctrtItemNm', quantity: 'ctrtQty', unit: 'ctrtUntVal', amount: 'ctrtAmt', order: ['ctrtItemSqno'] },
+  { name: 'dtlsPrnmNm', quantity: 'prchsDtlItemQty', unit: 'prchsDtlItemUntVal', amount: 'rowAmtSum', order: ['bidClsfNo', 'bidPbancItemSqno'] },
+  { name: 'dtlsPrnm', quantity: 'ctrtDmndQty', unit: 'qtyUntNm', amount: 'ctrtDmndAmt', order: ['ctrtDmndRcptItemSqno'] },
+];
+const decimalOf = (value: unknown): Decimal | undefined => { const text = typeof value === 'number' && Number.isFinite(value) ? String(value) : typeof value === 'string' ? numericText(value) : undefined; return text === undefined ? undefined : new Decimal(text); };
+/**
+ * The items cell shows the representative item (largest amount; ties and no amounts: lowest order) with its quantity,
+ * unit and amount and the item count, instead of '외 N건' (user, #30). The nested value remains available unchanged.
+ */
 export function nestedPreview(value: unknown, key: string): string {
   if (!['items', '물품', '품목'].includes(key) || value === null || typeof value !== 'object') return rawText(value);
   const items = Array.isArray(value) ? value : [value];
-  const names = ['dtlsPrnm', 'dtlsPrnmNm', 'itemCfnm', 'prdctNm', 'prnm', '품명', '세부품명', 'name'];
-  for (const item of items) {
-    if (item === null || typeof item !== 'object' || Array.isArray(item)) continue;
-    for (const name of names) {
-      if (own(item, name) && !isEmpty((item as JsonRow)[name]) && typeof (item as JsonRow)[name] !== 'object') {
-        return rawText((item as JsonRow)[name]) + (items.length > 1 ? ' 외 ' + (items.length - 1) + '건' : '');
-      }
-    }
+  const rows = items.filter((item): item is JsonRow => item !== null && typeof item === 'object' && !Array.isArray(item));
+  const count = items.length > 1 ? ' (전체 ' + items.length + '개 품목)' : '';
+  const keys = itemKeys.find(entry => rows.some(row => own(row, entry.order[entry.order.length - 1])));
+  if (keys) {
+    const position = (row: JsonRow) => keys.order.map(name => decimalOf(row[name]));
+    const ordered = rows.slice().sort((a, b) => { const x = position(a), y = position(b); for (let i = 0; i < x.length; i++) { if (x[i] && y[i] && !x[i]!.eq(y[i]!)) return x[i]!.cmp(y[i]!); if (!x[i] !== !y[i]) return x[i] ? -1 : 1; } return 0; });
+    let representative = ordered[0];
+    for (const row of ordered) { const amount = decimalOf(row[keys.amount]), best = decimalOf(representative[keys.amount]); if (amount && (!best || amount.gt(best))) representative = row; }
+    const part = (name: string) => isEmpty(representative[name]) || typeof representative[name] === 'object' ? '' : rawText(representative[name]);
+    const quantity = [part(keys.quantity), part(keys.unit)].filter(Boolean).join(' '), amount = part(keys.amount) && formatValue(part(keys.amount), 'money');
+    if (part(keys.name)) return [part(keys.name), quantity, amount].filter(Boolean).join(' · ') + count;
+  }
+  const names = ['dtlsPrnm', 'dtlsPrnmNm', 'ctrtItemNm', 'itemCfnm', 'prdctNm', 'prnm', '품명', '세부품명', 'name'];
+  for (const item of rows) for (const name of names) {
+    if (own(item, name) && !isEmpty(item[name]) && typeof item[name] !== 'object') return rawText(item[name]) + count;
   }
   return rawText(value);
 }
