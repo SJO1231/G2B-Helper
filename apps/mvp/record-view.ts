@@ -1,7 +1,6 @@
 import type { JsonRow, MvpSettings, ProcurementRecord, ProcurementStage } from './contracts';
 import { contractUserColumns, withContractValues } from './user-fields';
 const derived = new Set(['지체일수','미종결금액']);
-const identityKeys={receipt:['ctrtDmndRcptNo','ctrtDmndRcptOrd'],bid:['bidPbancNo','bidPbancOrd'],contract:['ctrtNo','ctrtChgOrd']};
 
 /** A display projection never becomes a persisted source record. Each owner keeps its key map. */
 export class RecordView {
@@ -19,7 +18,8 @@ export class RecordView {
   this.rawKey=allocate('원본 JSON','수집');
  }
  get userKeys(){return [...this.userNames.values()];}
- get readonlyKeys(){return[this.rawKey,...this.childNames.values(),...identityKeys[this.stage],...[...derived].map(k=>this.userNames.get(k)).filter((k):k is string=>!!k)];}
+ // Source values are read only; only user columns are edited (user, 2026-10-09, #42).
+ get readonlyKeys(){return[this.rawKey,...this.childNames.values(),...this.sourceKeys,...[...derived].map(k=>this.userNames.get(k)).filter((k):k is string=>!!k)];}
  get completionKey(){return this.userNames.get('종결')||'종결';}
  toRow(record:ProcurementRecord):JsonRow{
   const row:JsonRow=Object.assign(Object.create(null),structuredClone(record.fields));
@@ -35,9 +35,8 @@ export class RecordView {
   return values;
  }
  toEdit(record:ProcurementRecord,row:JsonRow){
-  for(const key of this.sourceKeys)if(!Object.hasOwn(record.fields,key)&&Object.hasOwn(row,key)&&row[key]!==''&&row[key]!==undefined&&row[key]!==null)throw new Error('이 행에 없는 원천 열은 사용자 열로 추가하세요: '+key);
-  // Removing a column definition does not erase values in rows outside the current filter.
-  return{recordId:record.recordId,storeVersion:record.storeVersion,fields:Object.fromEntries(Object.keys(record.fields).map(k=>[k,row[k]])),userValues:{...record.userValues,...this.userFromRow(row)}};
+  // Removing a column definition does not erase values in rows outside the current filter. Source values stay as stored.
+  return{recordId:record.recordId,storeVersion:record.storeVersion,fields:structuredClone(record.fields),userValues:{...record.userValues,...this.userFromRow(row)}};
  }
  definitionNames(displayKeys:string[]){return displayKeys.map(key=>[...this.userNames].find(([,alias])=>alias===key)?.[0]||key).filter(name=>!derived.has(name));}
  derive(row:JsonRow):JsonRow{

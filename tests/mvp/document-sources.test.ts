@@ -1,4 +1,4 @@
-/** Synthetic values only. #24: where a selected G2B screen row gets its output values. */
+/** Synthetic values only. #24, #42: which selected G2B screen rows can become documents. */
 import { describe, expect, it } from 'vitest';
 import { collectionScreen, defaultScreenRules, extractCapture } from '../../apps/mvp/extractor';
 import { extractionSources, recordSources } from '../../apps/mvp/document-sources';
@@ -14,58 +14,42 @@ const list = extractCapture({ url, pointInfo: listPoint, tables: { contracts: [
 const detail = extractCapture({ url, pointInfo: detailPoint, tables: { grdCtrtLis: [{ ctrtItemSqno: 1, ctrtAmt: '40', name: 'item' }] } });
 const view = (result: typeof list, key: string): ExtractionView => result.views.find(entry => entry.key === key)!;
 
-describe('G2B screen output sources (#24)', () => {
-  it('maps list rows to their own records and counts only changed record values as edits', () => {
-    const rows = view(list, 'contracts').rows, edited = { ...rows[1], title: 'changed' };
-    const sources = extractionSources([{ sourceIndex: 0, row: rows[0] }, { sourceIndex: 1, row: edited }], view(list, 'contracts'), list.observations, rows, true);
-    expect(sources.map(source => source.kind)).toEqual(['record', 'record']);
-    expect(sources[0]).not.toHaveProperty('edits');
-    expect(sources[1]).toMatchObject({ observation: { identity: ['L-2', '00'] }, edits: { title: 'changed' } });
+describe('G2B screen output sources (#24, #42)', () => {
+  it('maps list rows to their own records', () => {
+    const rows = view(list, 'contracts').rows;
+    const sources = extractionSources([{ sourceIndex: 0, row: rows[0] }, { sourceIndex: 1, row: rows[1] }], view(list, 'contracts'), list.observations, 'collection');
+    expect(sources).toEqual([{ kind: 'record', observation: list.observations[0] }, { kind: 'record', observation: list.observations[1] }]);
+    expect(sources[1]).toMatchObject({ observation: { identity: ['L-2', '00'] } });
   });
 
-  it('maps every detail table row to the one record and ignores edits of values that are not the record\'s own', () => {
+  it('maps every detail table row to the one record', () => {
     const rows = view(detail, 'grdCtrtLis').rows;
-    const [unchanged, child] = extractionSources([{ sourceIndex: 0, row: rows[0] }, { sourceIndex: 0, row: { ...rows[0], ctrtAmt: '41', name: 'renamed' } }], view(detail, 'grdCtrtLis'), detail.observations, rows, true);
-    expect(unchanged).toMatchObject({ kind: 'record', observation: { identity: ['C-1', '00'] } });
-    // The child row's amount was never the contract amount, so changing it is not a record edit.
-    expect(child).toEqual({ kind: 'record', observation: detail.observations[0] });
+    expect(extractionSources([{ sourceIndex: 0, row: rows[0] }], view(detail, 'grdCtrtLis'), detail.observations, 'collection')).toEqual([{ kind: 'record', observation: detail.observations[0] }]);
   });
 
-  it('blocks a collection target whose business key was not read, and outputs other screens only', () => {
+  it('blocks other screens, files and a collection target whose business key was not read (user, 2026-10-09)', () => {
     const unread = extractCapture({ url, pointInfo: listPoint, tables: { contracts: [{ title: 'no key' }] } });
     expect(unread.observations).toEqual([]);
     const target = view(unread, 'contracts');
-    expect(extractionSources([{ sourceIndex: 0, row: target.rows[0] }], target, [], target.rows, collectionScreen(target.source))[0].kind).toBe('blocked');
+    expect(collectionScreen(target.source)).toBe(true);
+    expect(extractionSources([{ sourceIndex: 0, row: target.rows[0] }], target, [], 'collection')[0]).toMatchObject({ kind: 'blocked', reason: expect.stringContaining('읽지 못해') });
     const other = extractCapture({ url, pointInfo: { areaCd: '14', depth1: '09999', depth2: '09999' }, tables: { rows: [{ name: 'a' }] } });
     const plain = view(other, 'rows');
     expect(collectionScreen(plain.source)).toBe(false);
-    expect(extractionSources([{ sourceIndex: 0, row: plain.rows[0] }], plain, [], plain.rows, false)).toEqual([{ kind: 'output', row: { name: 'a' } }]);
-    expect(extractionSources([{ sourceIndex: 0, row: { name: 'b' } }], plain, [], plain.rows, false)).toEqual([{ kind: 'output', row: { name: 'b' }, screen: { name: 'a' } }]);
-    // An added row has no screen value to choose.
-    expect(extractionSources([{ sourceIndex: 5, row: { name: 'new' } }], plain, [], plain.rows, false)).toEqual([{ kind: 'output', row: { name: 'new' } }]);
+    expect(extractionSources([{ sourceIndex: 0, row: plain.rows[0] }], plain, [], 'other')[0]).toMatchObject({ kind: 'blocked', reason: expect.stringContaining('수집 대상 화면이 아니어서') });
+    // A file opened as JSON is view only, even when it holds a collection target's records.
+    const rows = view(list, 'contracts').rows;
+    expect(extractionSources([{ sourceIndex: 0, row: rows[0] }], view(list, 'contracts'), list.observations, 'file')[0]).toMatchObject({ kind: 'blocked', reason: expect.stringContaining('보기 전용') });
   });
 
-  it('blocks rows added in the table, edited business keys and keys not among the screen records', () => {
-    const rows = view(list, 'contracts').rows, sources = (row: Record<string, unknown>, pristine: (Record<string, unknown> | undefined)[]) => extractionSources([{ sourceIndex: 0, row }], view(list, 'contracts'), list.observations, pristine, true)[0];
-    expect(sources(rows[0], [undefined])).toMatchObject({ kind: 'blocked', reason: expect.stringContaining('추가한 행') });
-    expect(sources({ ...rows[0], ctrtNo: 'L-2' }, rows)).toMatchObject({ kind: 'blocked', reason: expect.stringContaining('고칠 수 없습니다') });
+  it('blocks keys not among the screen records', () => {
     const unknown = { ctrtNo: 'L-9', ctrtChgOrd: '00', title: 'unknown' };
-    expect(sources(unknown, [unknown]).kind).toBe('blocked');
+    expect(extractionSources([{ sourceIndex: 0, row: unknown }], view(list, 'contracts'), list.observations, 'collection')[0]).toMatchObject({ kind: 'blocked', reason: expect.stringContaining('찾지 못해') });
   });
 
-  it('compares each row with the screen row it came from, not with its position', () => {
-    // After rows were deleted or added and the table drawn again, the caller maps grid indices back to screen rows.
-    const rows = view(list, 'contracts').rows, pristine = [rows[1], undefined];
-    const [kept, added] = extractionSources([{ sourceIndex: 0, row: { ...rows[1], title: 'changed' } }, { sourceIndex: 1, row: { name: 'new' } }], view(list, 'contracts'), list.observations, pristine, true);
-    expect(kept).toMatchObject({ kind: 'record', observation: { identity: ['L-2', '00'] }, edits: { title: 'changed' } });
-    expect(added.kind).toBe('blocked');
-  });
-
-  it('joins rows of one record and refuses different edits of the same value', () => {
+  it('joins rows of one record', () => {
     const observation = detail.observations[0];
-    expect(recordSources([{ kind: 'record', observation, edits: { ctrtAmt: '1' } }, { kind: 'record', observation }, { kind: 'output', row: {} }]))
-      .toEqual([{ observation, edits: { ctrtAmt: '1' } }]);
-    expect(() => recordSources([{ kind: 'record', observation, edits: { ctrtAmt: '1' } }, { kind: 'record', observation, edits: { ctrtAmt: '2' } }])).toThrow('ctrtAmt');
+    expect(recordSources([{ kind: 'record', observation }, { kind: 'record', observation }, { kind: 'blocked', reason: '' }])).toEqual([observation]);
   });
 
   it('recognizes collection screens with the default gate and with saved screen rules', () => {

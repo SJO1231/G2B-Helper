@@ -21,13 +21,8 @@ let settings:MvpSettings = {theme:'light',extractionMode:'tables',hideEmptyColum
 let settingsVersion=1, extraction:ExtractionResult|undefined, handle:GridRendererHandle|undefined;
 let records:ProcurementRecord[]=[], stage:ProcurementStage='receipt', activeView:ExtractionView|undefined, dirty=false, userVisible=true, isDb=mode==='db';
 let recordsRevision=0;
-const temporaryBuffers=new Map<string,JsonRow[]>();
-const temporaryColumns=new Map<string,string[]>();
 let recordView:RecordView|undefined, userColumnDraft:string[]=[];
-// Where each extracted grid row came from in the screen table, by grid source index; undefined for a row added in the table (#24).
-const temporaryOrigins=new Map<string,(number|undefined)[]>();
-let activeOrigins:(number|undefined)[]=[],activePristine:(JsonRow|undefined)[]=[];
-// Data opened from a file is never collected: documents use its screen values (user, 2026-10-08, #34).
+// Data opened from a file is view only: it is never collected or used for documents (user, 2026-10-09, #42).
 let extractionFromFile=false;
 let settingsQueue:Promise<void>=Promise.resolve();
 let confirmedSettings=structuredClone(settings),settingsRevision=0,viewKey='';
@@ -47,7 +42,7 @@ function message(text:string,error=false){const detail=text.replace(/\s*\n\s*/g,
 function fail(error:unknown){message(error instanceof Error?error.message:String(error),true);}
 function close(){rememberView();if(window.parent!==window){window.parent.postMessage({kind:'mvp.close'},'*');}else window.close();}
 function sourceKey(key:string){return [...(recordView?.userNames||[])].find(([,alias])=>alias===key)?.[0]||key;}
-function gridSettings(){const value=structuredClone(settings);if(isDb&&recordView)for(const[key,alias]of recordView.userNames){if(alias===key)continue;if(value.columnTypes?.[key])(value.columnTypes??={})[alias]=value.columnTypes[key];if(value.columnFormats&&Object.hasOwn(value.columnFormats,key))value.columnFormats[alias]=value.columnFormats[key];if(value.columnLocks?.[key]===true)(value.columnLocks??={})[alias]=true;if(Object.hasOwn(value.dictionary.keys,key))value.dictionary.keys[alias]=value.dictionary.keys[key];}return value;}
+function gridSettings(){const value=structuredClone(settings);if(isDb&&recordView)for(const[key,alias]of recordView.userNames){if(alias===key)continue;if(value.columnTypes?.[key])(value.columnTypes??={})[alias]=value.columnTypes[key];if(value.columnFormats&&Object.hasOwn(value.columnFormats,key))value.columnFormats[alias]=value.columnFormats[key];if(Object.hasOwn(value.dictionary.keys,key))value.dictionary.keys[alias]=value.dictionary.keys[key];}return value;}
 function theme(){document.documentElement.dataset.theme=settings.theme;handle?.setSettings(gridSettings());if(handle){refreshDateChoices();if(!isDb)applyDates();}window.parent.postMessage({kind:'mvp.settings',settings:{theme:settings.theme,shortcuts:settings.shortcuts,launchers:settings.launchers,screenRules:settings.screenRules}},'*');}
 const settingsButton=iconButton('settings','설정',()=>showSettings());title.append(heading,node('span',native?'':'샘플','demo-mark'),node('span',undefined,'spacer'),settingsButton,iconButton('close','닫기',close));
 let dragPointer:number|undefined;
@@ -64,8 +59,9 @@ function nestedView(key:string,rows:JsonRow[]){nested(key,rows);}
 function saveSettings(){const snapshot=structuredClone(settings),revision=++settingsRevision;const operation=settingsQueue.catch(()=>{}).then(async()=>{try{if(native){const saved=await rpc<{settings:MvpSettings;storeVersion:number}>('mvp.settings.save',{settings:snapshot,storeVersion:settingsVersion});settingsVersion=saved.storeVersion;confirmedSettings=structuredClone(saved.settings);}else confirmedSettings=structuredClone(snapshot);if(revision===settingsRevision){settings=structuredClone(confirmedSettings);theme();}}catch(error){if(revision===settingsRevision){settings=structuredClone(confirmedSettings);theme();}throw error;}});settingsQueue=operation;return operation;}
 function autosave(){theme();void saveSettings().catch(fail);}
 const search=input('검색');search.className='search';search.placeholder='검색';search.oninput=()=>handle?.setSearch(search.value);
-const save=button('저장',()=>saveRows());save.disabled=true;
-const importFile=input('JSON 열기','file');importFile.accept='.json,.txt';importFile.hidden=true;importFile.onchange=async()=>{const file=importFile.files?.[0];if(file){if(dirty&&isDb&&!confirm('저장하지 않은 입력을 닫을까요?'))return;extraction=loadJson(await file.text());extractionFromFile=true;temporaryBuffers.clear();temporaryColumns.clear();temporaryOrigins.clear();showExtraction();}importFile.value='';};
+// On a collection target screen the extraction's '저장' is collection (user, 2026-10-09, #42).
+const save=button('저장',async()=>{if(isDb)return saveRows();save.disabled=true;try{await collect();}finally{if(!isDb)collectable();}});save.disabled=true;
+const importFile=input('JSON 열기','file');importFile.accept='.json,.txt';importFile.hidden=true;importFile.onchange=async()=>{const file=importFile.files?.[0];if(file){if(dirty&&isDb&&!confirm('저장하지 않은 입력을 닫을까요?'))return;extraction=loadJson(await file.text());extractionFromFile=true;showExtraction();}importFile.value='';};
 const hiddenUser=button('사용자 열 숨김',()=>{userVisible=!userVisible;handle?.setUserColumnsVisible(userVisible);hiddenUser.classList.toggle('active',!userVisible);hiddenUser.setAttribute('aria-pressed',String(!userVisible));});hiddenUser.setAttribute('aria-pressed','false');hiddenUser.title='사용자 열 표시 여부를 전환합니다.';
 const finishSelected=button('종결',()=>handle?.toggleSelectedBoolean(recordView?.completionKey||'종결'));finishSelected.hidden=true;
 finishSelected.title='선택한 계약 행의 종결 체크를 반전합니다. 변경 후 저장하세요.';
@@ -74,7 +70,7 @@ const resetFilters=button('필터 해제',()=>handle?.clearColumnFilters());rese
 const tabList=node('div',undefined,'tab-list'),tabActions=node('div',undefined,'tab-actions');tabActions.append(finishSelected,hiddenUser,resetFilters,search);tabs.append(tabList,tabActions);
 const exports=node('div',undefined,'export-actions');exports.append(button('원본 JSON',()=>rawDialog(isDb?records.map(r=>({recordId:r.recordId,rawJson:r.rawJson})):extraction?.raw||{})),button('JSON',()=>download(JSON.stringify(exportJson(),null,2),'g2b-tables.json')),button('CSV',()=>handle?.exportCsv('g2b-table.csv')),button('Excel',()=>handle?.exportExcel('g2b-table.xlsx')),save,importFile);toolbar.append(filters,exports);
 const generateButton=button('생성',()=>generateDocuments());exports.insertBefore(generateButton,save);
-function exportJson(){if(isDb)return handle?.rows()||[];if(!extraction)return{};const tables=Object.fromEntries(extractionViews(extraction,'tables').map(v=>[v.key,temporaryBuffers.get(v.key)||v.rows]));if(settings.extractionMode==='all'){const points=extractionViews(extraction,'all').filter(v=>!Object.hasOwn(tables,v.key));return{pointInfo:points.length===1?(temporaryBuffers.get(points[0].key)||points[0].rows)[0]||{}:Object.fromEntries(points.map(v=>[v.key,(temporaryBuffers.get(v.key)||v.rows)[0]||{}])),tables};}return{tables};}
+function exportJson(){if(isDb)return handle?.rows()||[];if(!extraction)return{};const tables=Object.fromEntries(extractionViews(extraction,'tables').map(v=>[v.key,v.rows]));if(settings.extractionMode==='all'){const points=extractionViews(extraction,'all').filter(v=>!Object.hasOwn(tables,v.key));return{pointInfo:points.length===1?points[0].rows[0]||{}:Object.fromEntries(points.map(v=>[v.key,v.rows[0]||{}])),tables};}return{tables};}
 const start=input('시작일'),end=input('종료일');start.className=end.className='date-field';start.placeholder=end.placeholder='YYYY.MM.DD';
 const today=new Date();end.value=dateText(today);const initial=new Date(today);initial.setMonth(initial.getMonth()-3);start.value=dateText(initial);
 const dateKey=select('날짜 기준',[['','전체']]);const completion=select('종결 필터',[['all','전체'],['open','미종결'],['closed','종결']]);
@@ -89,26 +85,20 @@ function applyDates(){if(isDb){showRecords();return;}const begin=parseDate(start
 function destroyGrid(){rememberView();handle?.destroy();handle=undefined;viewKey='';area.replaceChildren();}
 function showGrid(view:ExtractionView, options:{userKeys?:string[];readonlyKeys?:string[]}={}){
  destroyGrid();activeView=view;dirty=false;save.disabled=true;save.hidden=false;viewKey=(isDb?'db:':'extract:')+view.key;const viewState=viewStates.get(viewKey);search.value=viewState?.search||'';userVisible=viewState?.userColumnsVisible!==false;hiddenUser.classList.toggle('active',!userVisible);hiddenUser.setAttribute('aria-pressed',String(!userVisible));
- handle=renderGrid(area,{label:view.label,rows:view.rows,viewState,settings:gridSettings(),userColumnKeys:options.userKeys,itemColumnKeys:isDb&&recordView?[...new Set(records.flatMap(r=>r.children.filter(c=>c.kind==='items').map(c=>recordView!.childNames.get(c.key)!).filter(Boolean)))]:undefined,readOnlyColumnKeys:options.readonlyKeys,allowRowDelete:true,onNotice:text=>message(text,true),
-  onRowsChanged:(rows,ids)=>{if(!isDb){temporaryBuffers.set(view.key,rows);temporaryOrigins.set(view.key,ids.map(id=>activeOrigins[id]));return;}dirty=true;save.disabled=!native;if(stage==='contract'&&recordView)handle?.updateDerivedValues(row=>recordView!.derive(row));},onUserColumnsChanged:(keys)=>{if(!isDb){temporaryColumns.set(view.key,keys);return;}userColumnDraft=recordView!.definitionNames(keys);dirty=true;save.disabled=!native;},onColumnRename:(key,label)=>{settings.dictionary.keys={...settings.dictionary.keys,[isDb?sourceKey(key):key]:label};autosave();},onColumnType:(key,type)=>{settings.columnTypes={...settings.columnTypes,[isDb?sourceKey(key):key]:type};autosave();},onColumnFormat:(key,format)=>{settings.columnFormats={...settings.columnFormats,[isDb?sourceKey(key):key]:format};autosave();},onColumnLock:(key,locked)=>{settings.columnLocks={...settings.columnLocks,[isDb?sourceKey(key):key]:locked};autosave();},onValueDictionary:(key,value,selection)=>valueDictionary((selection||[{key,value}]).map(entry=>({...entry,key:isDb?sourceKey(entry.key):entry.key}))),...(isDb?{onDeleteRows:(_rows:JsonRow[],indices:number[])=>{void trashRows(indices).catch(fail);},correction:correctedCell,onCorrection:correctionDialog}:{}),onNested:(_row,key,rows)=>nestedView(key,rows),onSettings:propertySettings,tableSettings:!isDb});
+ handle=renderGrid(area,{label:view.label,rows:view.rows,viewState,settings:gridSettings(),userColumnKeys:options.userKeys,itemColumnKeys:isDb&&recordView?[...new Set(records.flatMap(r=>r.children.filter(c=>c.kind==='items').map(c=>recordView!.childNames.get(c.key)!).filter(Boolean)))]:undefined,readOnlyColumnKeys:options.readonlyKeys,readOnly:!isDb,allowRowDelete:isDb,onNotice:text=>message(text,true),
+  // The extraction table is view only (user, 2026-10-09, #42); in the DB only user columns are edited.
+  onRowsChanged:()=>{if(!isDb)return;dirty=true;save.disabled=!native;if(stage==='contract'&&recordView)handle?.updateDerivedValues(row=>recordView!.derive(row));},onUserColumnsChanged:(keys)=>{if(!isDb)return;userColumnDraft=recordView!.definitionNames(keys);dirty=true;save.disabled=!native;},onColumnRename:(key,label)=>{settings.dictionary.keys={...settings.dictionary.keys,[isDb?sourceKey(key):key]:label};autosave();},onColumnType:(key,type)=>{settings.columnTypes={...settings.columnTypes,[isDb?sourceKey(key):key]:type};autosave();},onColumnFormat:(key,format)=>{settings.columnFormats={...settings.columnFormats,[isDb?sourceKey(key):key]:format};autosave();},onValueDictionary:(key,value,selection)=>valueDictionary((selection||[{key,value}]).map(entry=>({...entry,key:isDb?sourceKey(entry.key):entry.key}))),...(isDb?{onDeleteRows:(_rows:JsonRow[],indices:number[])=>{void trashRows(indices).catch(fail);}}:{}),onNested:(_row,key,rows)=>nestedView(key,rows),onSettings:propertySettings,tableSettings:!isDb});
  if(!userVisible)handle.setUserColumnsVisible(false);
 }
 // The 속성 panel changes the same settings as the settings window and saves them at once (user, #28).
 function propertySettings(changes:Partial<Pick<MvpSettings,'hideEmptyColumns'|'hideUnmappedColumns'|'hideEmptyTables'|'extractionMode'>>){Object.assign(settings,changes);if('hideEmptyTables'in changes||'extractionMode'in changes){void saveSettings().catch(fail);showExtraction();}else autosave();}
-function showExtraction(){if(!extraction)return;isDb=false;recordView=undefined;finishSelected.hidden=completion.hidden=true;filters.hidden=false;heading.textContent='추출';tabList.replaceChildren();const views=extractionViews(extraction,settings.extractionMode).filter(v=>!settings.hideEmptyTables||(temporaryBuffers.get(v.key)||v.rows).length>0);const show=(view:ExtractionView)=>{const rows=temporaryBuffers.get(view.key)||view.rows;activeOrigins=temporaryOrigins.get(view.key)||view.rows.map((_,index)=>index);activePristine=activeOrigins.map(origin=>origin===undefined?undefined:view.rows[origin]);dateChoices(rows);showGrid({...view,rows},{userKeys:temporaryColumns.get(view.key)});applyDates();};for(const view of views){const b=button(view.label,()=>{show(view);for(const tab of tabList.children)tab.classList.toggle('active',tab===b);});tabList.append(b);}if(views[0]){show(views[0]);tabList.firstElementChild?.classList.add('active');}else{dateChoices([]);destroyGrid();save.hidden=false;save.disabled=true;area.append(node('p','표가 없습니다.','empty'));}message(extraction.warnings.join(' · '));}
+function showExtraction(){if(!extraction)return;isDb=false;recordView=undefined;finishSelected.hidden=completion.hidden=true;filters.hidden=false;heading.textContent='추출';tabList.replaceChildren();const views=extractionViews(extraction,settings.extractionMode).filter(v=>!settings.hideEmptyTables||v.rows.length>0);const show=(view:ExtractionView)=>{dateChoices(view.rows);showGrid(view);collectable();applyDates();};for(const view of views){const b=button(view.label,()=>{show(view);for(const tab of tabList.children)tab.classList.toggle('active',tab===b);});tabList.append(b);}if(views[0]){show(views[0]);tabList.firstElementChild?.classList.add('active');}else{dateChoices([]);destroyGrid();save.hidden=false;collectable();area.append(node('p','표가 없습니다.','empty'));}message(extraction.warnings.join(' · '));}
+// Collection needs a read business record of a collection target; a file is view only.
+function collectable(){const ready=native&&!extractionFromFile&&!!extraction?.observations.length;save.disabled=!ready;save.title=ready?'이 화면의 업무 자료를 DB에 저장(수집)합니다.':extractionFromFile?'파일로 연 자료는 보기 전용입니다.':'수집 대상 화면의 업무 자료가 아닙니다.';}
 function recordRow(record:ProcurementRecord){return recordView!.toRow(record);}
-// 정정값 (a user correction) next to 당초값 (the last collected value), by displayed row (#36).
-let displayedRecords:ProcurementRecord[]=[];
-function correctedCell(index:number,key:string){const record=displayedRecords[index];return record?.overrides&&Object.hasOwn(record.overrides,key)?{source:record.sourceFields?.[key],value:record.overrides[key]}:undefined;}
-function correctionDialog(index:number,key:string){
- const record=displayedRecords[index];if(!record?.overrides||!Object.hasOwn(record.overrides,key))return;
- const {d,body}=dialog('정정값 확인');body.append(node('strong',Object.hasOwn(settings.dictionary.keys,key)?settings.dictionary.keys[key]:key),node('p','최근 수집값(당초값)'),node('pre',JSON.stringify(record.sourceFields?.[key])),node('p','사용자 정정값'),node('pre',JSON.stringify(record.overrides[key])));
- const reset=button('정정 취소 · 수집값 사용',async()=>{if(dirty)throw new Error('표 입력을 먼저 저장한 뒤 정정을 취소하세요.');reset.disabled=true;try{await rpc('mvp.corrections.reset',{records:[{recordId:record.recordId,storeVersion:record.storeVersion,fields:[key]}]});d.close();await loadRecords();message('최근 수집값으로 되돌렸습니다.');}finally{reset.disabled=false;}});
- reset.disabled=!native||settings.columnLocks?.[key]===true;body.append(reset);
-}
 function showRecords(){if(dirty){message('입력을 저장한 뒤 필터를 변경하세요.');return;}isDb=true;completion.hidden=finishSelected.hidden=stage!=='contract';const begin=parseDate(start.value),finish=parseDate(end.value);if(dateKey.value&&(!begin||!finish||begin>finish)){message('날짜 구간을 확인하세요.',true);return;}
  const filtered=records.filter(r=>{if(stage==='contract'&&completion.value!=='all'&&Boolean(r.userValues['종결'])!==(completion.value==='closed'))return false;if(dateKey.value){const source=sourceKey(dateKey.value),d=parseDate(recordView?.userNames.get(source)===dateKey.value?r.userValues[source]:r.fields[dateKey.value]);return !!d&&d>=begin!&&d<=finish!;}return true;});
- displayedRecords=filtered;showGrid({key:stage,label:stageLabels[stage],stage,rows:filtered.map(recordRow)},{userKeys:recordView!.userKeys,readonlyKeys:recordView!.readonlyKeys});
+ showGrid({key:stage,label:stageLabels[stage],stage,rows:filtered.map(recordRow)},{userKeys:recordView!.userKeys,readonlyKeys:recordView!.readonlyKeys});
  area.dataset.recordIds=JSON.stringify(filtered.map(r=>r.recordId));message('');
 }
 async function loadRecords(next:ProcurementStage=stage){if(dirty&&!confirm('저장하지 않은 입력을 닫을까요?'))return;const revision=++recordsRevision;area.inert=true;area.setAttribute('aria-busy','true');save.disabled=true;message('불러오는 중…');try{const loaded=native?await rpc<ProcurementRecord[]>('mvp.records',{stage:next}):demoStore.get(next)||demoRecords(next);if(revision!==recordsRevision)return;stage=next;records=loaded;if(!native)demoStore.set(stage,records);dirty=false;isDb=true;heading.textContent='DB';filters.hidden=false;
@@ -117,13 +107,14 @@ async function loadRecords(next:ProcurementStage=stage){if(dirty&&!confirm('저�
  tabList.replaceChildren();for(const [key,label]of Object.entries(stageLabels)){const b=button(label,()=>loadRecords(key as ProcurementStage));b.classList.toggle('active',key===stage);tabList.append(b);}showRecords();}catch(error){if(revision===recordsRevision)throw error;}finally{if(revision===recordsRevision){area.inert=false;area.setAttribute('aria-busy','false');save.disabled=!dirty||!native;}}
 }
 async function saveRows(){if(!isDb||!native)return;await settingsQueue;const ids=JSON.parse(area.dataset.recordIds||'[]') as string[];const rows=handle?.rows()||[];if(rows.length!==ids.length)throw new Error('업무 행 추가는 현재 지원하지 않습니다. 입력을 유지합니다.');
- const changes=rows.map((row,index)=>recordView!.toEdit(records.find(r=>r.recordId===ids[index])!,row));
+ // Only user columns are sent: source values are read only (user, 2026-10-09, #42).
+ const changes=rows.map((row,index)=>{const{recordId,storeVersion,userValues}=recordView!.toEdit(records.find(r=>r.recordId===ids[index])!,row);return{recordId,storeVersion,userValues};});
  await rpc('mvp.edit',{records:changes,userColumns:{stage,keys:userColumnDraft,settingsStoreVersion:settingsVersion}});(settings.userColumns??={})[stage]=userColumnDraft;(confirmedSettings.userColumns??={})[stage]=structuredClone(userColumnDraft);settingsVersion++;dirty=false;await loadRecords();message('저장됨');
 }
 async function collect(){if(!extraction)extraction=extractCapture(await captureCurrentPage(tabId),undefined,settings.screenRules);if(!extraction.observations.length){const text=extraction.warnings.join(' · ')||'등록 화면과 업무키를 확인하세요.';if(window.parent!==window){window.parent.postMessage({kind:'mvp.notice',message:text,error:true},'*');close();return;}message(text,true);return;}
  let preview=await rpc<CollectionPreview>('mvp.preview',{observations:extraction.observations});
  const choices:CollectionDecision[]=[];
- if(preview.conflicts.length){const {d,body}=dialog('값 변경');const checks=new Map<string,HTMLInputElement>();for(const conflict of preview.conflicts){const line=node('div',undefined,'diff');const corrected=Object.hasOwn(conflict,'override'),check=input(corrected?'새 화면값 사용(정정 해제)':'신규값 반영','checkbox');checks.set(conflict.recordId+'\0'+conflict.field,check);line.append(check,node('span',settings.dictionary.keys[conflict.field]||conflict.field),node('pre',(corrected?'당초값 ':'')+JSON.stringify(conflict.previous)),node('pre',(corrected?'화면값 ':'')+JSON.stringify(conflict.incoming)));if(corrected)line.append(node('span','정정값 유지(체크하지 않으면): '+JSON.stringify(conflict.override)));body.append(line);}await new Promise<void>(resolve=>{body.append(button('반영',()=>{for(const c of preview.conflicts)choices.push({recordId:c.recordId,field:c.field,useIncoming:checks.get(c.recordId+'\0'+c.field)!.checked});d.returnValue='apply';d.close();resolve();}));d.addEventListener('close',()=>resolve(),{once:true});});if(d.returnValue!=='apply')return;}
+ if(preview.conflicts.length){const {d,body}=dialog('값 변경');const checks=new Map<string,HTMLInputElement>();for(const conflict of preview.conflicts){const line=node('div',undefined,'diff');const check=input('신규값 반영','checkbox');checks.set(conflict.recordId+'\0'+conflict.field,check);line.append(check,node('span',settings.dictionary.keys[conflict.field]||conflict.field),node('pre',JSON.stringify(conflict.previous)),node('pre',JSON.stringify(conflict.incoming)));body.append(line);}await new Promise<void>(resolve=>{body.append(button('반영',()=>{for(const c of preview.conflicts)choices.push({recordId:c.recordId,field:c.field,useIncoming:checks.get(c.recordId+'\0'+c.field)!.checked});d.returnValue='apply';d.close();resolve();}));d.addEventListener('close',()=>resolve(),{once:true});});if(d.returnValue!=='apply')return;}
  await rpc('mvp.apply',{observations:preview.observations,token:preview.token,decisions:choices});await collectorBridge.sendCollectedData(preview.observations);stage=preview.observations[0].stage;location.search=`mode=db&sourceTabId=${tabId||''}&stage=${stage}${preview.items.some(item=>item.carriedFrom)?'&notice=carried':''}`;
 }
 async function trashRows(indices:number[]){if(dirty){message('입력을 저장한 뒤 휴지통으로 이동하세요.');return;}const ids=JSON.parse(area.dataset.recordIds||'[]')as string[];const selected=[...new Set(indices)].map(index=>records.find(r=>r.recordId===ids[index])).filter((r):r is ProcurementRecord=>!!r);if(!selected.length)return;if(native)await rpc('mvp.trash',{records:selected.map(r=>({recordId:r.recordId,storeVersion:r.storeVersion}))});else{demoTrash.set(stage,[...(demoTrash.get(stage)||[]),...selected.map(r=>({...r,storeVersion:r.storeVersion+1}))]);demoStore.set(stage,records.filter(r=>!selected.some(s=>s.recordId===r.recordId)));}await loadRecords();message(`${selected.length}개 행을 휴지통으로 이동했습니다.`);}
@@ -131,10 +122,10 @@ async function showTrash(){if(dirty){message('입력을 저장한 뒤 휴지통�
 function setDictionaryValue(key:string,value:string,label:string){const values=settings.dictionary.values;settings.dictionary.values={...values,[key]:{...(Object.hasOwn(values,key)?values[key]:{}),[value]:label}};}
 function valueDictionary(selection:{key:string;value:unknown}[]){const{d,body}=dialog('값 사전 추가');const entries=[...new Map(selection.map(entry=>[JSON.stringify([entry.key,rawText(entry.value)]),entry])).values()];const edits=entries.map(({key,value})=>{const code=input('원값'),label=input('표시값');code.value=rawText(value);label.value=Object.hasOwn(settings.dictionary.values,key)&&Object.hasOwn(settings.dictionary.values[key],code.value)?settings.dictionary.values[key][code.value]:'';const name=node('span',settings.dictionary.keys[key]||key||'(빈 키)');name.append(node('small',key||'(빈 키)'));const line=node('div',undefined,'value-editor');line.append(name,code,label);body.append(line);return{key,code,label};});const actions=node('div',undefined,'dialog-actions');actions.append(iconButton('save','저장',async()=>{for(const edit of edits)setDictionaryValue(edit.key,edit.code.value,edit.label.value);await saveSettings();d.close();}));body.append(actions);edits[0]?.label.focus();}
 function dictionary(body:HTMLElement,kind:'keys'|'values'){
- const table=node('table',undefined,'dictionary-grid '+kind),header=node('tr');for(const text of kind==='keys'?['원본 키','표시명','유형','입력 잠금','']:['원본 키','원값','표시값',''])header.append(node('th',text));table.append(header);
- const entries=kind==='keys'?[...new Set([...Object.keys(settings.dictionary.keys),...Object.keys(settings.columnTypes||{}),...Object.keys(settings.columnLocks||{})])].map(key=>[key,'',settings.dictionary.keys[key]||'']):Object.entries(settings.dictionary.values).flatMap(([key,values])=>Object.entries(values).map(([value,label])=>[key,value,label]));
- for(const[key,value,label]of entries){const row=node('tr'),edit=input('표시명');edit.value=label;edit.onchange=()=>{if(kind==='keys')settings.dictionary.keys={...settings.dictionary.keys,[key]:edit.value};else setDictionaryValue(key,value,edit.value);};for(const text of kind==='keys'?[key]:[key,value])row.append(node('td',text));const cell=node('td');cell.append(edit);row.append(cell);if(kind==='keys'){const typeCell=node('td'),lockCell=node('td'),type=select('유형 '+key,Object.entries(columnTypeLabels),settings.columnTypes?.[key]||'text'),lock=input('입력 잠금 '+key,'checkbox');type.onchange=()=>{settings.columnTypes={...settings.columnTypes,[key]:type.value as MvpColumnType};};lock.checked=settings.columnLocks?.[key]===true;lock.onchange=()=>{settings.columnLocks={...settings.columnLocks,[key]:lock.checked};};typeCell.append(type);lockCell.append(lock);row.append(typeCell,lockCell);}const remove=node('td');remove.append(button('삭제',()=>{if(kind==='keys'){delete settings.dictionary.keys[key];delete settings.columnTypes?.[key];delete settings.columnFormats?.[key];delete settings.columnLocks?.[key];}else delete settings.dictionary.values[key][value];row.remove();}));row.append(remove);table.append(row);}
- const row=node('tr',undefined,'dictionary-add'),key=input('원본 키'),value=input('원값'),label=input(kind==='keys'?'표시명':'표시값');const cell=(child:HTMLElement)=>{const td=node('td');td.append(child);row.append(td);};cell(key);if(kind==='values')cell(value);cell(label);let type:HTMLSelectElement|undefined,lock:HTMLInputElement|undefined;if(kind==='keys'){type=select('새 열 유형',Object.entries(columnTypeLabels));lock=input('새 열 입력 잠금','checkbox');cell(type);cell(lock);}cell(button('추가',()=>{if(!key.value.trim())throw new Error('원본 키를 입력하세요.');if(kind==='keys'){settings.dictionary.keys={...settings.dictionary.keys,[key.value]:label.value};settings.columnTypes={...settings.columnTypes,[key.value]:type!.value as MvpColumnType};settings.columnLocks={...settings.columnLocks,[key.value]:lock!.checked};}else setDictionaryValue(key.value,value.value,label.value);body.replaceChildren();dictionary(body,kind);}));table.append(row);body.append(table);
+ const table=node('table',undefined,'dictionary-grid '+kind),header=node('tr');for(const text of kind==='keys'?['원본 키','표시명','유형','']:['원본 키','원값','표시값',''])header.append(node('th',text));table.append(header);
+ const entries=kind==='keys'?[...new Set([...Object.keys(settings.dictionary.keys),...Object.keys(settings.columnTypes||{})])].map(key=>[key,'',settings.dictionary.keys[key]||'']):Object.entries(settings.dictionary.values).flatMap(([key,values])=>Object.entries(values).map(([value,label])=>[key,value,label]));
+ for(const[key,value,label]of entries){const row=node('tr'),edit=input('표시명');edit.value=label;edit.onchange=()=>{if(kind==='keys')settings.dictionary.keys={...settings.dictionary.keys,[key]:edit.value};else setDictionaryValue(key,value,edit.value);};for(const text of kind==='keys'?[key]:[key,value])row.append(node('td',text));const cell=node('td');cell.append(edit);row.append(cell);if(kind==='keys'){const typeCell=node('td'),type=select('유형 '+key,Object.entries(columnTypeLabels),settings.columnTypes?.[key]||'text');type.onchange=()=>{settings.columnTypes={...settings.columnTypes,[key]:type.value as MvpColumnType};};typeCell.append(type);row.append(typeCell);}const remove=node('td');remove.append(button('삭제',()=>{if(kind==='keys'){delete settings.dictionary.keys[key];delete settings.columnTypes?.[key];delete settings.columnFormats?.[key];}else delete settings.dictionary.values[key][value];row.remove();}));row.append(remove);table.append(row);}
+ const row=node('tr',undefined,'dictionary-add'),key=input('원본 키'),value=input('원값'),label=input(kind==='keys'?'표시명':'표시값');const cell=(child:HTMLElement)=>{const td=node('td');td.append(child);row.append(td);};cell(key);if(kind==='values')cell(value);cell(label);let type:HTMLSelectElement|undefined;if(kind==='keys'){type=select('새 열 유형',Object.entries(columnTypeLabels));cell(type);}cell(button('추가',()=>{if(!key.value.trim())throw new Error('원본 키를 입력하세요.');if(kind==='keys'){settings.dictionary.keys={...settings.dictionary.keys,[key.value]:label.value};settings.columnTypes={...settings.columnTypes,[key.value]:type!.value as MvpColumnType};}else setDictionaryValue(key.value,value.value,label.value);body.replaceChildren();dictionary(body,kind);}));table.append(row);body.append(table);
 }
 function screenRulesEditor(content:HTMLElement){
  const defaultCheck=input('기본 수집 화면 사용','checkbox');defaultCheck.checked=settings.screenRules===undefined;const label=node('label');label.append(defaultCheck,'기본 수집 화면 사용');content.append(label);const list=node('div',undefined,'screen-rules');content.append(list);
@@ -200,8 +191,8 @@ async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen
  const resume=unconfirmedDocumentRequest;
  const explicit=structuredClone(resume?.payload.items||entry?.items);
  const selected=explicit?explicit.map((item,sourceIndex)=>({sourceIndex,row:item.fields})):structuredClone(handle?.getSelectedRows()||[]);if(!selected.length)throw new Error('생성할 행의 셀을 선택하세요.');
- // G2B screen rows: a collection target is compared with the DB and saved first; other extracted rows are output only.
- const sources:OutputSource[]|undefined=resume?undefined:entry?.observations?structuredClone(entry.observations).map(observation=>({kind:'record' as const,observation})):!isDb&&activeView&&extraction?extractionSources(selected,activeView,extractionFromFile?[]:extraction.observations,activePristine,!extractionFromFile&&collectionScreen(activeView.source,settings.screenRules)):undefined;
+ // G2B screen rows: a collection target is collected first; any other screen or file data is not output (user, 2026-10-09, #42).
+ const sources:OutputSource[]|undefined=resume?undefined:entry?.observations?structuredClone(entry.observations).map(observation=>({kind:'record' as const,observation})):!isDb&&activeView&&extraction?extractionSources(selected,activeView,extraction.observations,extractionFromFile?'file':collectionScreen(activeView.source,settings.screenRules)?'collection':'other'):undefined;
  let kind=resume?.payload.sourceKind||entry?.sourceKind||(isDb?'db':'screen');
  const selectedStage=explicit?.[0]?.stage||(isDb?stage:sources?.flatMap(source=>source.kind==='record'?[source.observation.stage]:[])[0]||activeView?.stage);
  if(explicit&&explicit.some(item=>item.stage!==selectedStage))throw new Error('같은 업무의 자료를 선택하세요.');
@@ -310,69 +301,18 @@ async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen
   }));
   resultArea.replaceChildren(box);
  };
- // One choice per item; '취소' ends the output without saving anything.
- const pick=(name:string,options:[string,string][])=>{
-  const line=node('div',undefined,'document-choice'),radios=options.map(([value,text])=>{const radio=input(text,'radio'),label=node('label');radio.name=name;radio.value=value;label.append(radio,text);line.append(label);return radio;});
-  return{line,value:()=>radios.find(radio=>radio.checked)?.value};
- };
- const ask=(box:HTMLElement,label:string,picks:(()=>string|undefined)[])=>new Promise<boolean>(resolve=>{
-  const actions=node('div',undefined,'dialog-actions');
-  actions.append(button(label,()=>{if(picks.some(value=>!value()))throw new Error('건마다 하나를 고르세요.');resultArea.replaceChildren(node('p','처리 중…'));resolve(true);}),button('취소',()=>resolve(false)));
-  box.append(actions);resultArea.replaceChildren(box);
- });
  const fieldLabel=(field:string)=>{try{const path=JSON.parse(field);if(Array.isArray(path))return`하위 표 ${path[1]} ${Number(path[2])+1}행 ${labels()[path[3]]||path[3]}`;}catch{/* A plain source key. */}return labels()[field]||field;};
- // G2B screen output (user, 2026-10-08, #24): compare with the DB item by item, save, then generate from the saved values.
- const prepare=async(picked:number[]):Promise<{items:DocumentItem[];kind:'screen'|'db'}|undefined>=>{
-  const chosen=picked.map(index=>({index,source:sources![index]}));
-  for(const {source}of chosen)if(source.kind==='blocked')throw new Error(source.reason);
-  // Several rows of one record (a detail screen) are one item.
-  const records=recordSources(chosen.map(({source})=>source)),outputs=chosen.flatMap(({index,source})=>source.kind==='output'?[{index,source}]:[]);
-  if(outputs.length&&records.length)throw new Error('저장할 자료와 출력만 하는 자료를 함께 고를 수 없습니다.');
-  const differences=(before:JsonRow,after:JsonRow)=>[...new Set([...Object.keys(before),...Object.keys(after)])].filter(key=>JSON.stringify(before[key])!==JSON.stringify(after[key])).map(key=>[key,before[key],after[key]]as const);
-  const edited=[...records.flatMap((record,position)=>record.edits?[{key:'record-'+position,title:record.observation.identity.join(' / '),changes:differences(record.observation.fields,{...record.observation.fields,...record.edits}),use:(edit:boolean)=>{if(!edit)delete record.edits;}}]:[]),
-   ...outputs.flatMap(output=>output.source.screen?[{key:'output-'+output.index,title:descriptions[output.index],changes:differences(output.source.screen,output.source.row),use:(edit:boolean)=>{if(!edit)output.source={...output.source,row:output.source.screen!};}}]:[])];
-  if(edited.length){
-   const box=node('div',undefined,'document-review'),picks=edited.map(entry=>{const choice=pick('edit-'+entry.key,[['edit','고친 값'],['screen','화면 값']]);box.append(node('strong',entry.title),...entry.changes.map(([key,before,after])=>node('div',`${labels()[key]||key}: ${rawText(before)} → ${rawText(after)}`)),choice.line);return choice.value;});
-   box.prepend(node('p','추출한 뒤 표에서 고친 자료입니다. 건마다 출력에 쓸 값을 고르세요.'));
-   if(!await ask(box,'선택한 값으로 계속',picks))return undefined;
-   edited.forEach((entry,position)=>entry.use(picks[position]()==='edit'));
-  }
-  // Not a collection target: output only, nothing is saved.
-  if(outputs.length)return{kind:'screen',items:documentItems(outputs.map(({index,source})=>({sourceIndex:selected[index].sourceIndex,row:source.row})),{kind:'screen',view:context.view as ExtractionView,stage:chosenStage as ProcurementStage})};
-  const observations=records.map(record=>record.observation),edits=records.some(record=>record.edits)?records.map(record=>record.edits??null):undefined;
-  const preview=await rpc<CollectionPreview>('mvp.preview',{observations,...(edits?{edits}:{})});
-  const keepDb=new Set<number>(),changed=preview.items.flatMap((item,position)=>item.status==='changed'?[position]:[]);
-  if(changed.length){
-   const box=node('div',undefined,'document-review'),picks=new Map<number,()=>string|undefined>();
-   box.append(node('p',`화면과 DB가 다릅니다(${changed.length}건). 건마다 출력할 값을 고르세요.`));
-   for(const position of changed){
-    const choice=pick('db-'+position,[['screen','화면대로: 화면 값으로 DB를 덮어쓰고 출력'],['db','DB대로: DB 값으로 출력(DB는 그대로)']]);picks.set(position,choice.value);
-    box.append(node('strong',observations[position].identity.join(' / ')),...preview.conflicts.filter(conflict=>conflict.recordId===preview.items[position].recordId&&!Object.hasOwn(conflict,'override')).map(conflict=>node('div',`${fieldLabel(conflict.field)}: DB ${rawText(conflict.previous)} / ${edits?.[position]&&Object.hasOwn(edits[position]!,conflict.field)?'고친 값':'화면'} ${rawText(conflict.incoming)}`)),choice.line);
-   }
-   if(!await ask(box,'선택대로 출력',[...picks.values()]))return undefined;
-   for(const [position,value]of picks)if(value()==='db')keepDb.add(position);
-  }
-  // The same or new records, and the ones to overwrite, are saved; a later generation failure leaves them saved.
-  const store=observations.flatMap((_,position)=>keepDb.has(position)?[]:[position]);
-  // Corrected cells whose 나라장터 value changed: keep the correction or use the new screen value (user, 2026-10-08, #36).
-  const keepCorrection=new Set<string>(),corrections=preview.conflicts.filter(conflict=>Object.hasOwn(conflict,'override')&&store.some(position=>preview.items[position].recordId===conflict.recordId));
-  if(corrections.length){
-   const box=node('div',undefined,'document-review'),picks=corrections.map((conflict,index)=>{
-    const choice=pick('correction-'+index,[['keep','정정값 유지'],['screen','새 화면값 사용(정정 해제)']]),position=preview.items.findIndex(item=>item.recordId===conflict.recordId);
-    box.append(node('strong',observations[position].identity.join(' / ')),node('div',`${fieldLabel(conflict.field)}: 당초값 ${rawText(conflict.previous)} / 정정값 ${rawText(conflict.override)} / 화면값 ${rawText(conflict.incoming)}`),choice.line);return choice.value;
-   });
-   box.prepend(node('p','고친 칸의 나라장터 값이 바뀌었습니다. 칸마다 고르세요.'));
-   if(!await ask(box,'선택대로 출력',picks))return undefined;
-   corrections.forEach((conflict,index)=>{if(picks[index]()==='keep')keepCorrection.add(conflict.recordId+'\0'+conflict.field);});
-  }
-  if(store.length){
-   const subset={observations:store.map(position=>observations[position]),...(edits?{edits:store.map(position=>edits[position])}:{})};
-   const current=store.length===observations.length?preview:await rpc<CollectionPreview>('mvp.preview',subset);
-   if(JSON.stringify(current.conflicts)!==JSON.stringify(preview.conflicts.filter(conflict=>current.items.some(item=>item.recordId===conflict.recordId))))throw new Error('비교한 뒤 DB 자료가 바뀌었습니다. 다시 생성하세요.');
-   await rpc('mvp.apply',{...subset,token:current.token,decisions:current.conflicts.map(conflict=>({recordId:conflict.recordId,field:conflict.field,useIncoming:!keepCorrection.has(conflict.recordId+'\0'+conflict.field)}))});
-   await collectorBridge.sendCollectedData(subset.observations);
-   storeNote.textContent=`DB에 ${store.length}건 저장했습니다. 다시 생성하면 저장된 값을 씁니다.`+(current.items.some(item=>item.carriedFrom)?' 이전 차수의 사용자 열 값을 가져왔습니다.':'');
-  }
+ // G2B screen output (user, 2026-10-09, #42): documents are made from collected DB records only. The selected records
+ // are collected first with the screen values applied, then generated from the stored values.
+ const prepare=async(picked:number[]):Promise<{items:DocumentItem[];kind:'db'}>=>{
+  const chosen=picked.map(index=>sources![index]);
+  for(const source of chosen)if(source.kind==='blocked')throw new Error(source.reason);
+  const observations=recordSources(chosen);
+  const preview=await rpc<CollectionPreview>('mvp.preview',{observations});
+  await rpc('mvp.apply',{observations,token:preview.token,decisions:preview.conflicts.map(conflict=>({recordId:conflict.recordId,field:conflict.field,useIncoming:true}))});
+  await collectorBridge.sendCollectedData(observations);
+  const changed=[...new Set(preview.conflicts.map(conflict=>fieldLabel(conflict.field)))];
+  storeNote.textContent=`DB에 ${observations.length}건 수집했습니다.`+(changed.length?` 화면 값으로 바뀐 칸: ${changed.join(', ')}.`:'')+(preview.items.some(item=>item.carriedFrom)?' 이전 차수의 사용자 열 값을 가져왔습니다.':'');
   const recordStage=observations[0].stage,stored=await rpc<ProcurementRecord[]>('mvp.records',{stage:recordStage});
   const chosenRecords=preview.items.map(item=>stored.find(record=>record.recordId===item.recordId));
   if(chosenRecords.some(record=>!record))throw new Error('저장한 자료를 DB에서 찾지 못했습니다. 다시 생성하세요.');
@@ -388,7 +328,7 @@ async function generateDocuments(entry?:{items:DocumentItem[];sourceKind:'screen
    if(!chosenItems.length&&!saved.length){
     const picked=choices.flatMap((choice,index)=>choice.checked?[index]:[]);
     if(!picked.length||picked.length>100)throw new Error('생성할 자료를 1~100건 선택하세요.');
-    if(sources){const prepared=await prepare(picked);if(!prepared){d.close();return;}chosenItems=prepared.items;kind=prepared.kind;}
+    if(sources){const prepared=await prepare(picked);chosenItems=prepared.items;kind=prepared.kind;}
     else{const items=fixedItems||documentItems(selected,context.kind==='db'?context:{...context,stage:chosenStage});chosenItems=items.filter((_,index)=>choices[index].checked);}
    }
    if(!chosenItems.length||chosenItems.length>100)throw new Error('생성할 자료를 1~100건 선택하세요.');

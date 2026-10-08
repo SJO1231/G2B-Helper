@@ -188,7 +188,7 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     table.options.clipboardPasteAction([['1,234']]); expect(handle.rows()).toEqual([{ amount: '1234', total: '2468' }]);
     const key = (value: string, shiftKey = false) => parent.children[0].fire('keydown', { target: parent.children[0].children[3], key: value, ctrlKey: true, shiftKey, preventDefault() {}, stopImmediatePropagation() {} });
     key('z'); expect(handle.rows()).toEqual([{ amount: '100', total: '200' }]); key('z', true); expect(handle.rows()).toEqual([{ amount: '1234', total: '2468' }]);
-    handle.setSettings({ ...settings, columnLocks: { amount: true } }); key('z'); expect(handle.rows()[0].amount).toBe('1234'); handle.destroy();
+    handle.destroy();
   });
   it('restores ordered columns, widths and sorting while exports share visible rows and headers', () => {
     const source = [{ code: '001', amount: '1234.5', flag: false }, { code: '002', amount: '9999999999999999.1', flag: true }];
@@ -222,18 +222,18 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     proxy.value = '입력'; proxy.fire('input', { isComposing: false }); expect(input?.value).toBe('입력'); expect(proxy.value).toBe('');
     proxy.fire('compositionstart'); proxy.value = '한'; proxy.fire('input', { isComposing: true }); expect(cell.edit).toHaveBeenCalledTimes(1);
     proxy.value = '한글'; proxy.fire('compositionend'); expect(input?.value).toBe('한글'); expect(cell.edit).toHaveBeenCalledTimes(2);
-    handle.setSettings({ ...settings, columnLocks: { code: true } }); proxy.value = '금지'; proxy.fire('input', { isComposing: false });
-    expect(cell.edit).toHaveBeenCalledTimes(2); expect(handle.rows()).toEqual([{ code: '원래 값' }]); handle.destroy();
+    expect(handle.rows()).toEqual([{ code: '원래 값' }]); handle.destroy();
   });
-  it('keeps proxy clipboard copying raw TSV and pasting atomic across locked columns', () => {
-    const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: '클립보드', rows: [{ code: '00\t01', flag: false }], settings });
+  it('keeps proxy clipboard copying raw TSV and pasting atomic across read-only columns', () => {
+    const paste = { clipboardData: { getData: () => '0002	true' }, preventDefault() {}, stopPropagation() {} };
+    const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: '클립보드', rows: [{ code: '00	01', flag: false }], settings, readOnlyColumnKeys: ['flag'] });
     const table = state.tables[0]; table.fire('tableBuilt'); const first = table.getRows()[0], proxy = parent.children[0].children[3];
     table.rangeCells = [[first.getCell('f0'), first.getCell('f1')]];
-    const setData = vi.fn(); proxy.fire('copy', { clipboardData: { setData }, preventDefault() {}, stopPropagation() {} }); expect(setData).toHaveBeenCalledWith('text/plain', '"00\t01"\tfalse');
-    handle.setSettings({ ...settings, columnLocks: { flag: true } });
-    proxy.fire('paste', { clipboardData: { getData: () => '0002\ttrue' }, preventDefault() {}, stopPropagation() {} });
-    expect(handle.rows()).toEqual([{ code: '00\t01', flag: false }]); handle.setSettings(settings);
-    proxy.fire('paste', { clipboardData: { getData: () => '0002\ttrue' }, preventDefault() {}, stopPropagation() {} }); expect(handle.rows()).toEqual([{ code: '0002', flag: true }]); handle.destroy();
+    const setData = vi.fn(); proxy.fire('copy', { clipboardData: { setData }, preventDefault() {}, stopPropagation() {} }); expect(setData).toHaveBeenCalledWith('text/plain', '"00	01"	false');
+    proxy.fire('paste', paste); expect(handle.rows()).toEqual([{ code: '00	01', flag: false }]); handle.destroy();
+    const open = new FakeElement(), editable = renderGrid(open as unknown as HTMLElement, { label: '클립보드', rows: [{ code: '00	01', flag: false }], settings });
+    const second = state.tables[1]; second.fire('tableBuilt'); second.rangeCells = [[second.getRows()[0].getCell('f0'), second.getRows()[0].getCell('f1')]];
+    open.children[0].children[3].fire('paste', paste); expect(editable.rows()).toEqual([{ code: '0002', flag: true }]); editable.destroy();
   });
   it('routes notices to the shared bottom line or keeps its fallback at the grid bottom', () => {
     const onNotice = vi.fn(), parent = new FakeElement();
@@ -298,16 +298,6 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     handle.clearColumnFilters();
     expect(table.filter(table.data[0])).toBe(true); expect(table.filter(table.data[1])).toBe(false); handle.destroy();
   });
-  it('marks corrected cells with a badge and a 정정값 확인 menu that call back with the row and key (#36)', () => {
-    const onCorrection = vi.fn(), handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '정정', rows: [{ code: '001', amount: '5' }], settings, correction: (index, key) => index === 0 && key === 'amount' ? { source: '4', value: '5' } : undefined, onCorrection });
-    const table = state.tables[0]; table.fire('tableBuilt');
-    const cell = table.getRows()[0].getCell('f1'), span = table.options.columns[1].formatter(cell);
-    expect(span.children[0].textContent).toBe('정정'); expect(span.title).toContain('최근 수집값: 4');
-    span.children[0].fire('click'); expect(onCorrection).toHaveBeenLastCalledWith(0, 'amount');
-    expect(table.options.columns[1].contextMenu({}, cell).map((entry: any) => entry.label)).toContain('정정값 확인');
-    expect(table.options.columns[0].formatter(table.getRows()[0].getCell('f0')).children).toHaveLength(0);
-    handle.destroy();
-  });
   it('renders representative item names and right-aligned money while nested details keep the full raw data', () => {
     const onNested = vi.fn(), source = [{ items: [{ dtlsPrnmNm: '합성 품명', code: '0001', quantity: 0, flag: false }, { itemCfnm: '다른 품명' }], amount: '1.000000000000000001' }];
     const handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '품목', rows: source, settings, onNested });
@@ -329,17 +319,16 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     key('7'); expect(cell.edit).toHaveBeenCalledTimes(2);
     expect(input?.value).toBe('7'); handle.destroy();
   });
-  it('respects persisted column locks for direct edits, atomic paste and boolean toggles', () => {
-    const onColumnLock = vi.fn(), parent = new FakeElement();
-    const handle = renderGrid(parent as unknown as HTMLElement, { label: '잠금', rows: [{ code: '001', completed: false, derived: 0 }], userColumnKeys: ['completed'], readOnlyColumnKeys: ['derived'], settings: { ...settings, columnLocks: { completed: true } }, onColumnLock });
+  it('keeps read-only columns out of direct edits, typing and atomic paste, with no column lock menu (#42)', () => {
+    const parent = new FakeElement();
+    const handle = renderGrid(parent as unknown as HTMLElement, { label: '읽기 전용', rows: [{ code: '001', completed: false, derived: 0 }], userColumnKeys: ['completed'], readOnlyColumnKeys: ['code', 'derived'], settings });
     const table = state.tables[0]; table.fire('tableBuilt');
-    const cell = table.getRows()[0].getCell('f1'); expect(table.options.columns[1].editable(cell)).toBe(false);
-    table.rangeCells = [[table.getRows()[0].getCell('f0')]]; expect(table.options.clipboardPasteAction([['002', 'true']])).toEqual([]);
-    handle.toggleSelectedBoolean('completed'); expect(handle.rows()).toEqual([{ code: '001', completed: false, derived: 0 }]);
-    table.options.columns[1].headerContextMenu.find((entry: any) => entry.label === '열 잠금 해제').action();
-    expect(onColumnLock).toHaveBeenCalledWith('completed', false); expect(table.options.columns[1].editable(cell)).toBe(true);
-    const readonlyMenu = table.options.columns[2].headerContextMenu.find((entry: any) => entry.label.includes('잠금'));
-    expect(readonlyMenu.disabled).toBe(true); readonlyMenu.action(); expect(table.options.columns[2].editable(table.getRows()[0].getCell('f2'))).toBe(false);
+    const code = table.getRows()[0].getCell('f0');
+    expect(table.options.columns[0].editable(code)).toBe(false); expect(table.options.columns[1].editable(table.getRows()[0].getCell('f1'))).toBe(true);
+    table.rangeCells = [[code]]; expect(table.options.clipboardPasteAction([['002', 'true']])).toEqual([]);
+    const proxy = parent.children[0].children[3]; proxy.value = '금지'; proxy.fire('input', { isComposing: false }); expect(code.edit).not.toHaveBeenCalled();
+    expect(handle.rows()).toEqual([{ code: '001', completed: false, derived: 0 }]);
+    expect(table.options.columns.flatMap((column: any) => column.headerContextMenu.map((entry: any) => entry.label)).some((label: string) => label.includes('잠금'))).toBe(false);
     handle.destroy();
   });
   it('adds the raw cell value to its dictionary and deletes only real rows in source order', async () => {

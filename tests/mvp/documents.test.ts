@@ -33,10 +33,10 @@ describe('document input snapshot',()=>{
   const screen=documentItems(selected,{kind:'screen',view:{key:'A',label:'A',rows:[]},stage:'contract'});
   expect(db.length).toBe(101);expect(db[100].identity).toEqual(['100','01']);expect(screen[100].fields.ctrtNo).toBe('100');
  });
- it('uses original DB identity after sorting and preserves edits and same-name user values separately',()=>{
+ it('uses original DB identity after sorting, the stored source values and same-name user values separately (#42)',()=>{
   const records=[record('0001'),record('0002')],view=new RecordView(records,'contract',settings),row=view.toRow(records[1]);row.memo='edited source';row[view.userNames.get('memo')!]='edited user';
   const [item]=documentItems([{sourceIndex:1,row}],{kind:'db',records,recordIds:['0001','0002'],view});
-  expect(item.identity).toEqual(['0002','01']);expect(item.fields).toMatchObject({ctrtNo:'0002',memo:'edited source',zero:0,flag:false,blank:'',amount:'12345678901234567890.0001'});expect(item.userValues.memo).toBe('edited user');expect(item.children).toEqual(records[1].children);expect(item.fields).not.toHaveProperty('표시용 계약번호');
+  expect(item.identity).toEqual(['0002','01']);expect(item.fields).toMatchObject({ctrtNo:'0002',memo:'source',zero:0,flag:false,blank:'',amount:'12345678901234567890.0001'});expect(item.userValues.memo).toBe('edited user');expect(item.children).toEqual(records[1].children);expect(item.fields).not.toHaveProperty('표시용 계약번호');
   item.children[0].rows[0].id='changed';expect(records[1].children[0].rows[0].id).toBe('0001');expect(records[1].fields.memo).toBe('source');
  });
  it('passes the current extracted table without joining other tables or using display labels',()=>{

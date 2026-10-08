@@ -168,9 +168,8 @@ try {
       await mainGrid().locator('.tabulator-menu').getByText(label, { exact: true }).click();
     }
     await expect(await cell('amount')).toHaveText('12,345,678,901,234,567,890.123456789'); await expect(await cell('date')).toHaveText('2026.10.01');
-    await (await cell('date')).dblclick(); await expect(editor()).toBeVisible(); await editor().fill('2026.02.30'); await editor().press('Enter');
-    await expect(editor()).toBeVisible(); await expect(page.locator('.shell > .status')).toContainText('유효한');
-    await editor().press('Escape'); await expect(await cell('date')).toHaveText('2026.10.01');
+    // The extraction table is view only (#42); date input checks run on a DB user column below.
+    await (await cell('date')).dblclick(); await expect(editor()).not.toBeVisible(); await expect(await cell('date')).toHaveText('2026.10.01');
   });
   await check('scroll to worksheet padding: all empty region rows have numbers', async () => {
     const holder = mainGrid().locator('.tabulator-tableholder'); await holder.evaluate(element => { element.scrollTop = element.scrollHeight; });
@@ -179,45 +178,38 @@ try {
     assert.ok(numbers.some(text => Number(text) > 4), 'No numbered empty worksheet row found');
     await holder.evaluate(element => { element.scrollTop = 0; });
   });
-  await check('double click edit, Enter commit, Tab commit and Escape cancel preserve text precision', async () => {
-    await (await cell('code')).dblclick(); await expect(editor()).toBeVisible(); await editor().fill('0009'); await editor().press('Enter'); await expect(await cell('code')).toHaveText('0009');
-    await (await cell('amount')).dblclick(); await expect(editor()).toBeVisible(); await editor().fill('1.000000000000000001'); await editor().press('Tab'); await expect(await cell('amount')).toHaveText('1.000000000000000001');
-    await (await cell('amount')).dblclick(); await editor().fill('999'); await editor().press('Escape'); await expect(await cell('amount')).toHaveText('1.000000000000000001');
+  await check('extraction is view only (#42): double click, typing and Delete leave the source values', async () => {
+    await (await cell('code')).dblclick(); await expect(editor()).not.toBeVisible();
+    await page.keyboard.type('9'); await page.keyboard.press('Delete'); await expect(editor()).not.toBeVisible();
+    await expect(await cell('code')).toHaveText('0001'); await expect(await cell('amount')).toHaveText('12,345,678,901,234,567,890.123456789');
   });
-  await check('range drag selection, raw clipboard copy and CRLF paste', async () => {
+  await check('range drag selection and raw clipboard copy; paste does not edit the view-only extraction', async () => {
     const from = await (await cell('code')).boundingBox(), to = await (await cell('amount', 1)).boundingBox();
     await page.mouse.move(from.x + 8, from.y + 10); await page.mouse.down(); await page.mouse.move(to.x + 40, to.y + 12, { steps: 8 }); await page.mouse.up();
     assert.ok(await mainGrid().locator('.tabulator-range-selected').count() >= 4, 'Range did not select a rectangle');
-    await page.keyboard.press('Control+c'); const copied = await page.evaluate(() => navigator.clipboard.readText()); assert.ok(copied.includes('0009') && copied.includes('1.000000000000000001'));
-    await selectWithoutEditing('code'); await page.evaluate(() => navigator.clipboard.writeText('0008\r\n')); await page.keyboard.press('Control+v'); await expect(await cell('code')).toHaveText('0008');
+    await page.keyboard.press('Control+c'); const copied = await page.evaluate(() => navigator.clipboard.readText()); assert.ok(copied.includes('0001') && copied.includes('12345678901234567890.123456789') && copied.includes('1234.56789'));
+    await selectWithoutEditing('code'); await page.evaluate(() => navigator.clipboard.writeText('0008\r\n')); await page.keyboard.press('Control+v'); await expect(await cell('code')).toHaveText('0001');
   });
-  await check('settings black/white keeps the edit buffer; three screenshots include dark mode', async () => {
+  await check('settings black/white keeps the view; three screenshots include dark mode', async () => {
     await page.locator('.shell > .titlebar').getByRole('button', { name: '설정', exact: true }).click(); const settings = page.locator('dialog[open]');
     await settings.getByLabel('테마', { exact: true }).selectOption('dark');
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await settings.getByRole('button', { name: '저장', exact: true }).click();
-    await expect(await cell('code')).toHaveText('0008'); await screenshot('02-extract-dark.png');
+    await expect(await cell('code')).toHaveText('0001'); await screenshot('02-extract-dark.png');
     await page.locator('.shell > .titlebar').getByRole('button', { name: '설정', exact: true }).click();
     await page.locator('dialog[open]').getByLabel('테마', { exact: true }).selectOption('light'); await page.locator('dialog[open]').getByRole('button', { name: '저장', exact: true }).click();
   });
-  await check('user column add/hide/show/delete and display-name source key immutability', async () => {
-    await addUserColumn(); await mainGrid().getByLabel('사용자 열 이름').fill('메모');
-    await mainGrid().locator('.mvp-grid-panel').getByRole('button', { name: '추가', exact: true }).click(); await expect(await header('메모')).toBeVisible();
-    await page.getByRole('button', { name: '사용자 열 숨김', exact: true }).click(); await expect(await header('메모')).not.toBeVisible();
-    await page.getByRole('button', { name: '사용자 열 숨김', exact: true }).click(); await expect(await header('메모')).toBeVisible();
-    await (await header('메모')).click({ button: 'right' }); await mainGrid().locator('.tabulator-menu').getByText('사용자 열 삭제', { exact: true }).click();
-    await (await header('code')).click({ button: 'right' }); await mainGrid().locator('.tabulator-menu').getByText('표시명 설정', { exact: true }).click();
+  await check('extraction has no user columns (view only) and display names keep source keys', async () => {
+    await openProperties(); await expect(mainGrid().locator('.mvp-grid-panel').getByRole('button', { name: '사용자 열 추가', exact: true })).toHaveCount(0);
+    await mainGrid().locator('.mvp-grid-panel').getByRole('button', { name: '닫기', exact: true }).click();
+    await (await header('code')).click({ button: 'right' }); await expect(mainGrid().locator('.tabulator-menu').getByText('사용자 열 추가', { exact: true })).toHaveCount(0);
+    await mainGrid().locator('.tabulator-menu').getByText('표시명 설정', { exact: true }).click();
     await mainGrid().getByLabel('열 표시명').fill('코드 표시'); await mainGrid().locator('.mvp-grid-panel').getByRole('button', { name: '적용', exact: true }).click();
     await expect(await header('코드 표시')).toBeVisible();
   });
-  await check('empty-table user column metadata survives switching views before any cell is populated', async () => {
+  await check('switching to the empty table and back keeps the extraction rows', async () => {
     const tabs = page.locator('.shell > .tabs'); await tabs.getByRole('button', { name: '빈 표', exact: true }).click(); await waitRows(0);
-    await addUserColumn(); await mainGrid().getByLabel('사용자 열 이름').fill('빈 사용자 열');
-    await mainGrid().locator('.mvp-grid-panel').getByRole('button', { name: '추가', exact: true }).click(); await expect(await header('빈 사용자 열')).toBeVisible(); await waitRows(0);
-    await tabs.getByRole('button', { name: '합성 표', exact: true }).click(); await waitRows(4);
-    await tabs.getByRole('button', { name: '빈 표', exact: true }).click(); await waitRows(0); await expect(await header('빈 사용자 열')).toBeVisible();
-    await (await header('빈 사용자 열')).click({ button: 'right' }); await mainGrid().locator('.tabulator-menu').getByText('사용자 열 삭제', { exact: true }).click();
-    await tabs.getByRole('button', { name: '합성 표', exact: true }).click(); await waitRows(4);
+    await tabs.getByRole('button', { name: '합성 표', exact: true }).click(); await waitRows(4); await expect(await cell('코드 표시')).toHaveText('0001');
   });
   await check('Excel and CSV downloads preserve identifier and decimal values; Excel follows filters and mapped headers', async () => {
     await page.getByLabel('검색', { exact: true }).fill('0002'); await waitRows(1);
@@ -255,13 +247,26 @@ try {
     await page.locator('.tab-actions').getByRole('button', { name: '종결', exact: true }).click();
     await expect(await cell('종결')).toHaveText('true'); await expect(await cell('종결', 1)).toHaveText('false');
   });
-  await check('editing contract amount/designated date recalculates readonly values in the same worksheet', async () => {
+  await check('contract source amount is read only; user amount/date edits keep precision and recalculate readonly values (#42)', async () => {
     await goto('mode=db&stage=contract');
-    await (await cell('계약금액')).dblclick(); await expect(editor()).toBeVisible(); await editor().fill('2000.1234567890123456789'); await editor().press('Enter');
-    await expect(await cell('미종결금액')).toHaveText('1,000.1234567890123456789');
-    await (await cell('지정일')).dblclick(); await expect(editor()).toBeVisible(); await editor().fill('20261102'); await editor().press('Enter');
+    await (await cell('계약금액')).dblclick(); await expect(editor()).not.toBeVisible(); await expect(await cell('계약금액')).toHaveText('35,608,652.5');
+    await (await cell('종결금액')).dblclick(); await expect(editor()).toBeVisible(); await editor().fill('1.000000000000000001'); await editor().press('Tab'); await expect(await cell('종결금액')).toHaveText('1.000000000000000001');
+    await (await cell('종결금액')).dblclick(); await editor().fill('999'); await editor().press('Escape'); await expect(await cell('종결금액')).toHaveText('1.000000000000000001');
+    await (await cell('종결금액')).dblclick(); await editor().fill('1000.1234567890123456789'); await editor().press('Enter');
+    await expect(await cell('미종결금액')).toHaveText('35,607,652.3765432109876543211');
+    await (await cell('지정일')).dblclick(); await expect(editor()).toBeVisible(); await editor().fill('2026.02.30'); await editor().press('Enter');
+    await expect(page.locator('.shell > .status')).toContainText('유효한'); await expect(editor()).toBeHidden(); await expect(await cell('지정일')).toHaveText('2026.11.01');
+    await (await cell('지정일')).dblclick(); await editor().fill('20261102'); await editor().press('Enter');
     await expect(await cell('지체일수')).toHaveText('6');
-    await expect(await cell('계약금액')).toHaveText('2,000.1234567890123456789');
+  });
+  await check('DB user column add/hide/show/delete and raw paste into a user column (#42)', async () => {
+    await goto('mode=db&stage=receipt');
+    await addUserColumn(); await mainGrid().getByLabel('사용자 열 이름').fill('메모');
+    await mainGrid().locator('.mvp-grid-panel').getByRole('button', { name: '추가', exact: true }).click(); await expect(await header('메모')).toBeVisible();
+    await page.getByRole('button', { name: '사용자 열 숨김', exact: true }).click(); await expect(await header('메모')).not.toBeVisible();
+    await page.getByRole('button', { name: '사용자 열 숨김', exact: true }).click(); await expect(await header('메모')).toBeVisible();
+    await (await header('메모')).click({ button: 'right' }); await mainGrid().locator('.tabulator-menu').getByText('사용자 열 삭제', { exact: true }).click();
+    await selectWithoutEditing('담당'); await page.evaluate(() => navigator.clipboard.writeText('0008\r\n')); await page.keyboard.press('Control+v'); await expect(await cell('담당')).toHaveText('0008');
   });
   await check('sorting changes display order while persisted row buffers retain record input order', async () => {
     await goto('mode=db&stage=contract'); const sort = (await header('계약번호')).locator('.tabulator-col-sorter'); await sort.click(); await sort.click();
