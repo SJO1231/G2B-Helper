@@ -60,7 +60,7 @@ function saveSettings(){const snapshot=structuredClone(settings),revision=++sett
 function autosave(){theme();void saveSettings().catch(fail);}
 const search=input('검색');search.className='search';search.placeholder='검색';search.oninput=()=>handle?.setSearch(search.value);
 // On a collection target screen the extraction's '저장' is collection (user, 2026-10-09, #42).
-const save=button('저장',()=>isDb?saveRows():collect());save.disabled=true;
+const save=button('저장',async()=>{if(isDb)return saveRows();save.disabled=true;try{await collect();}finally{if(!isDb)collectable();}});save.disabled=true;
 const importFile=input('JSON 열기','file');importFile.accept='.json,.txt';importFile.hidden=true;importFile.onchange=async()=>{const file=importFile.files?.[0];if(file){if(dirty&&isDb&&!confirm('저장하지 않은 입력을 닫을까요?'))return;extraction=loadJson(await file.text());extractionFromFile=true;showExtraction();}importFile.value='';};
 const hiddenUser=button('사용자 열 숨김',()=>{userVisible=!userVisible;handle?.setUserColumnsVisible(userVisible);hiddenUser.classList.toggle('active',!userVisible);hiddenUser.setAttribute('aria-pressed',String(!userVisible));});hiddenUser.setAttribute('aria-pressed','false');hiddenUser.title='사용자 열 표시 여부를 전환합니다.';
 const finishSelected=button('종결',()=>handle?.toggleSelectedBoolean(recordView?.completionKey||'종결'));finishSelected.hidden=true;

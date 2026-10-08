@@ -1,7 +1,6 @@
 import type { JsonRow, MvpSettings, ProcurementRecord, ProcurementStage } from './contracts';
 import { contractUserColumns, withContractValues } from './user-fields';
 const derived = new Set(['지체일수','미종결금액']);
-const identityKeys={receipt:['ctrtDmndRcptNo','ctrtDmndRcptOrd'],bid:['bidPbancNo','bidPbancOrd'],contract:['ctrtNo','ctrtChgOrd']};
 
 /** A display projection never becomes a persisted source record. Each owner keeps its key map. */
 export class RecordView {
