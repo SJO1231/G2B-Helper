@@ -562,7 +562,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
     const target = event.target;
     if (!ready || !(target instanceof Element) || target !== typingTarget && target.closest('input,textarea,select,button,.mvp-grid-nested')) return;
     if ((event.ctrlKey || event.metaKey) && ['z', 'y'].includes(event.key.toLowerCase())) { event.preventDefault(); event.stopImmediatePropagation(); replay(event.key.toLowerCase() === 'z' && !event.shiftKey); return; }
-    if (options.readOnly) return;
+    // A view-only table still moves with the arrows, Shift ranges, Tab, Enter and Esc; edit keys stop at editableColumn (#65).
     const cell = selected()[0]; if (!cell) return;
     if (event.key === 'Delete' || event.key === 'Backspace') {
       event.preventDefault(); event.stopImmediatePropagation();
