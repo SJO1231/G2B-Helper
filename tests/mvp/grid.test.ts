@@ -166,9 +166,9 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     const dictionary = vi.fn(), handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '여러 값', rows: [{ code: '001', flag: false }, { code: '002', flag: true }], settings, onValueDictionary: dictionary });
     const table = state.tables[0]; table.fire('tableBuilt'); const rows = table.getRows();
     table.rangeCells = [[rows[0].getCell('f1')], [rows[1].getCell('f1')], [rows[2].getCell('f1')]];
-    const menu = table.options.columns[1].contextMenu({}, rows[0].getCell('f1')); menu[0].action();
+    const menu = table.options.columns[1].contextMenu({}, rows[0].getCell('f1')); menu.find((entry: any) => entry.label === '값 사전 추가').action();
     expect(dictionary).toHaveBeenLastCalledWith('flag', false, [{ key: 'flag', value: false }, { key: 'flag', value: true }]);
-    table.options.columns[0].contextMenu({}, rows[0].getCell('f0'))[0].action(); expect(dictionary).toHaveBeenLastCalledWith('code', '001');
+    table.options.columns[0].contextMenu({}, rows[0].getCell('f0')).find((entry: any) => entry.label === '값 사전 추가').action(); expect(dictionary).toHaveBeenLastCalledWith('code', '001');
     expect(handle.rows()).toEqual([{ code: '001', flag: false }, { code: '002', flag: true }]); handle.destroy();
   });
   it('retains nested objects and arrays as JSON in the written Excel file', () => {
@@ -285,6 +285,17 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     const rows = find(parent, 'mvp-grid-choice-row'); expect(rows).toHaveLength(1);
     const box = rows[0].children[1].children[0] as any; expect([box.checked, rows[0].children[1].children[1].textContent]).toEqual([true, '출력 제외']);
     box.checked = false; box.fire('change'); expect(onOutput).toHaveBeenCalledWith('code', true); handle.destroy();
+  });
+  it('shows the whole value read only from the menu and on double click of a read-only cell (#67)', () => {
+    const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: '값', rows: [{ code: '첫 줄\n둘째 줄', memo: 'x', items: [{ a: 1 }] }], settings, userColumnKeys: ['memo'], readOnlyColumnKeys: ['code'] });
+    const table = state.tables[0]; table.fire('tableBuilt'); const row = table.getRows()[0], panel = parent.children[0].children[1];
+    const value = () => panel.children[1].children[0];
+    expect(table.options.columns.every((column: any) => column.contextMenu({}, row.getCell(column.field))[0].label === '값 보기')).toBe(true);
+    table.options.columns[1].contextMenu({}, row.getCell('f1'))[0].action(); expect([panel.hidden, value().textContent, value().className]).toEqual([false, 'x', 'mvp-grid-value']);
+    table.fire('cellDblClick', {}, row.getCell('f0')); expect(value().textContent).toBe('첫 줄\n둘째 줄');
+    panel.hidden = true; table.fire('cellDblClick', {}, row.getCell('f1')); expect(panel.hidden).toBe(true); // an editable cell edits instead
+    table.fire('cellDblClick', {}, row.getCell('f2')); expect(panel.hidden).toBe(true); // a child table opens its own window
+    handle.destroy();
   });
   it('moves with the keys in a view-only table but never edits (#65)', () => {
     const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: '보기', rows: [{ code: '1', name: 'a' }, { code: '2', name: 'b' }], settings, readOnly: true });
