@@ -286,6 +286,20 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     const box = rows[0].children[1].children[0] as any; expect([box.checked, rows[0].children[1].children[1].textContent]).toEqual([true, '출력 제외']);
     box.checked = false; box.fire('change'); expect(onOutput).toHaveBeenCalledWith('code', true); handle.destroy();
   });
+  it('moves with the keys in a view-only table but never edits (#65)', () => {
+    const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: '보기', rows: [{ code: '1', name: 'a' }, { code: '2', name: 'b' }], settings, readOnly: true });
+    const table = state.tables[0]; table.fire('tableBuilt'); const [first, second] = table.getRows(), target = parent.children[0].children[3];
+    const key = (value: string, shiftKey = false) => parent.children[0].fire('keydown', { target, key: value, shiftKey, preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {} });
+    const at = () => [table.rangeCells[0][0].getRow().getData().f0, table.rangeCells[0][0].getField()];
+    table.rangeCells = [[first.getCell('f0')]];
+    key('ArrowDown'); expect(at()).toEqual(['2', 'f0']);
+    key('ArrowRight'); expect(at()).toEqual(['2', 'f1']);
+    key('Tab', true); expect(at()).toEqual(['2', 'f0']);
+    key('Enter', true); expect(at()).toEqual(['1', 'f0']);
+    const cell = first.getCell('f0'); table.rangeCells = [[cell]]; key('Delete'); key('F2'); key('x'); expect(cell.edit).not.toHaveBeenCalled();
+    expect(handle.rows()).toEqual([{ code: '1', name: 'a' }, { code: '2', name: 'b' }]);
+    key('Escape'); expect(table.getRanges()).toHaveLength(0); handle.destroy();
+  });
   it('refuses a user column named like a source key or a label (#47)', () => {
     const handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '이름', rows: [{ code: '1' }], settings: { ...settings, dictionary: { keys: { code: '코드 표시', other: '다른 표시' }, values: {} } } });
     state.tables[0].fire('tableBuilt');
