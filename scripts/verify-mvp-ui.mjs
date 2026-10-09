@@ -259,7 +259,8 @@ try {
     await (await cell('종결금액')).dblclick(); await editor().fill('1000.1234567890123456789'); await editor().press('Enter');
     await expect(await cell('미종결금액')).toHaveText('35,607,652.3765432109876543211');
     await (await cell('지정일')).dblclick(); await expect(editor()).toBeVisible(); await editor().fill('2026.02.30'); await editor().press('Enter');
-    await expect(page.locator('.shell > .status')).toContainText('유효한'); await expect(editor()).toBeHidden(); await expect(await cell('지정일')).toHaveText('2026.11.01');
+    await expect(page.locator('.shell > .status')).toContainText('유효한'); await expect(editor()).toBeVisible(); await expect(editor()).toHaveValue('2026.02.30');
+    await editor().press('Escape'); await expect(await cell('지정일')).toHaveText('2026.11.01');
     await (await cell('지정일')).dblclick(); await editor().fill('20261102'); await editor().press('Enter');
     await expect(await cell('지체일수')).toHaveText('6');
   });
