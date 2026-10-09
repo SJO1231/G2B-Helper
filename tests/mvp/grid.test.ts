@@ -297,6 +297,14 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     table.fire('cellDblClick', {}, row.getCell('f2')); expect(panel.hidden).toBe(true); // a child table opens its own window
     handle.destroy();
   });
+  it('shows 0, false and null as text, and skips child table cells (#67)', () => {
+    const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: '보기', rows: [{ zero: 0, flag: false, none: null, items: [{ a: 1 }] }], settings, readOnly: true });
+    const table = state.tables[0]; table.fire('tableBuilt'); const row = table.getRows()[0], panel = parent.children[0].children[1];
+    const shown = (field: string) => { table.fire('cellDblClick', {}, row.getCell(field)); return panel.children[1].children[0].textContent; };
+    expect([shown('f0'), shown('f1'), shown('f2')]).toEqual(['0', 'false', 'null']);
+    panel.hidden = true; table.fire('cellDblClick', {}, row.getCell('f3')); expect(panel.hidden).toBe(true);
+    handle.destroy();
+  });
   it('moves with the keys in a view-only table but never edits (#65)', () => {
     const parent = new FakeElement(), handle = renderGrid(parent as unknown as HTMLElement, { label: '보기', rows: [{ code: '1', name: 'a' }, { code: '2', name: 'b' }], settings, readOnly: true });
     const table = state.tables[0]; table.fire('tableBuilt'); const [first, second] = table.getRows(), target = parent.children[0].children[3];

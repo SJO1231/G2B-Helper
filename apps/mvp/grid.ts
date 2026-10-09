@@ -357,7 +357,8 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
   function showValue(cell: CellComponent, column: GridColumn): void {
     const value = cell.getValue(), content = openPanel('값 보기 · ' + model.label(column, settings));
     const text = element('pre', typeof value === 'string' ? value : value !== null && typeof value === 'object' ? JSON.stringify(value, null, 2) : rawText(value), 'mvp-grid-value');
-    text.tabIndex = 0; content.append(text); queueMicrotask(() => { if (!disposed) text.focus(); });
+    // After the click's own refocus task (focusSelection), so a double click leaves the focus on the value.
+    text.tabIndex = 0; content.append(text); setTimeout(() => { if (!disposed && !panel.hidden) text.focus(); }, 0);
   }
   function addColumnDialog(): void {
     if (options.readOnly) return;
