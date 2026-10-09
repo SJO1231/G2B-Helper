@@ -58,6 +58,8 @@ function timeParts(text: string): { date: [string, string, string]; time: string
   if (!date || Number(match[3]) > 23 || Number(match[4]) > 59 || Number(match[5] || '0') > 59) return;
   return { date, time: match[3] + ':' + match[4] + ':' + (match[5] || '00') + (match[6] || '') };
 }
+// One collator for every sort comparison instead of one per localeCompare call (#68).
+const collator = new Intl.Collator(undefined, { numeric: true });
 export function compareValues(a: unknown, b: unknown, type?: MvpColumnType): number {
   const left = rawText(a), right = rawText(b);
   if (['number', 'money', 'percent'].includes(type || '')) {
@@ -65,21 +67,21 @@ export function compareValues(a: unknown, b: unknown, type?: MvpColumnType): num
     const y = typeof b === 'number' && Number.isFinite(b) ? right : numericText(right.replace(/%$/, ''));
     if (x !== undefined && y !== undefined) return new Decimal(x).cmp(y);
     if (x !== undefined || y !== undefined) return x === undefined ? 1 : -1;
-    return left.localeCompare(right, undefined, { numeric: true });
+    return collator.compare(left, right);
   }
   if (type === 'date') {
     const x = dateParts(left), y = dateParts(right);
     if (x && y) return x.join('').localeCompare(y.join(''));
     if (x || y) return x ? -1 : 1;
-    return left.localeCompare(right, undefined, { numeric: true });
+    return collator.compare(left, right);
   }
   if (type === 'datetime') {
     const x = timeParts(left), y = timeParts(right);
     if (x && y) return (x.date.join('') + x.time.slice(0, 8)).localeCompare(y.date.join('') + y.time.slice(0, 8)) || new Decimal('0' + x.time.slice(8)).cmp('0' + y.time.slice(8));
     if (x || y) return x ? -1 : 1;
-    return left.localeCompare(right, undefined, { numeric: true });
+    return collator.compare(left, right);
   }
-  return typeof a === 'number' && typeof b === 'number' ? a - b : left.localeCompare(right, undefined, { numeric: true });
+  return typeof a === 'number' && typeof b === 'number' ? a - b : collator.compare(left, right);
 }
 export function formatValue(value: unknown, type?: MvpColumnType, format: MvpColumnFormat = {}): string {
   const text = rawText(value);

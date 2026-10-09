@@ -278,6 +278,16 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     const range = tablePane.children[1].children[1]; range.value = 'all'; range.fire('change'); expect(onSettings).toHaveBeenLastCalledWith({ extractionMode: 'all' });
     handle.destroy();
   });
+  it('redraws the 속성 column list after the queued column rebuild so its checks match the table (#68)', async () => {
+    const parent = new FakeElement(), onSettings = (changes: Partial<MvpSettings>) => handle.setSettings({ ...settings, ...changes });
+    const handle = renderGrid(parent as unknown as HTMLElement, { label: '속성', rows: [{ blank: '', code: '001' }], settings, onSettings });
+    const table = state.tables[0]; table.fire('tableBuilt'); table.options.rowHeader.titleFormatter().fire('click');
+    const columnPane = parent.children[0].children[1].children[1].children[1], blankShown = () => columnPane.children[3].children[0].children[0].checked;
+    expect(table.getColumn('f0').isVisible()).toBe(false); expect(blankShown()).toBe(false);
+    const emptyColumns = columnPane.children.find(child => child.children[1]?.textContent === '빈 열 숨김')!.children[0];
+    emptyColumns.checked = false; emptyColumns.fire('change');
+    await new Promise(resolve => setTimeout(resolve, 0)); expect(table.getColumn('f0').isVisible()).toBe(true); expect(blankShown()).toBe(true); handle.destroy();
+  });
   it('puts a 출력 제외 box beside each column the page gives an output state, apart from showing (#46)', () => {
     const parent = new FakeElement(), onOutput = vi.fn();
     const handle = renderGrid(parent as unknown as HTMLElement, { label: '출력', rows: [{ code: '001', raw: 'x' }], settings, output: key => key === 'code' ? false : undefined, onOutput });

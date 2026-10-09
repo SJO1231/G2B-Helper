@@ -320,7 +320,8 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
     const settingCheck = (label: string, key: 'hideEmptyColumns' | 'hideUnmappedColumns' | 'hideEmptyTables', redraw: boolean, enabled = true): HTMLLabelElement => {
       const line = element('label', undefined, 'mvp-grid-check'), check = labelledInput(label, 'checkbox');
       check.checked = !!settings[key]; check.disabled = !enabled;
-      check.addEventListener('change', () => { options.onSettings?.({ [key]: check.checked }); if (redraw && !disposed) draw(); });
+      // onSettings queues the column rebuild synchronously; redraw the list once it has run (#68).
+      check.addEventListener('change', () => { options.onSettings?.({ [key]: check.checked }); if (redraw && !disposed) void definitionQueue.then(() => { if (!disposed) draw(); }); });
       line.append(check, element('span', label)); return line;
     };
     columnPane.append(search, groupHeading, groups, list);
@@ -636,7 +637,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
           if (disposed) return;
           await table.setColumns(order.map(column => definition(column, data)));
           if (!disposed) { if (sorters.length) table.setSort(sorters); updateCount(); refreshHeaders(); applyFilter(); }
-        });
+        }).catch(report);
       });
     },
     setUserColumnsVisible: (visible: boolean) => {
