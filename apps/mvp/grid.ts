@@ -353,6 +353,13 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
     updateDefinition(column);
     table.getRows().forEach(row => row.reformat()); options.onColumnType?.(column.key, type);
   }
+  // '값 보기' (user, 2026-10-09, #67): the whole raw value, line breaks as lines, selectable for Ctrl+C, never editable.
+  function showValue(cell: CellComponent, column: GridColumn): void {
+    const value = cell.getValue(), content = openPanel('값 보기 · ' + model.label(column, settings));
+    const text = element('pre', typeof value === 'string' ? value : value !== null && typeof value === 'object' ? JSON.stringify(value, null, 2) : rawText(value), 'mvp-grid-value');
+    // After the click's own refocus task (focusSelection), so a double click leaves the focus on the value.
+    text.tabIndex = 0; content.append(text); setTimeout(() => { if (!disposed && !panel.hidden) text.focus(); }, 0);
+  }
   function addColumnDialog(): void {
     if (options.readOnly) return;
     const content = openPanel('사용자 열 추가');
@@ -399,10 +406,11 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
       hozAlign: ['money', 'number', 'percent'].includes(typeOf(column) || '') ? 'right' : typeOf(column) === 'boolean' ? 'center' : 'left',
       headerContextMenu: menu, editor: options.readOnly ? undefined : editCell,
       // Tabulator 6.5 loadMenuEvent accepts functions; @types 6.3 declares only arrays.
-      contextMenu: (options.onValueDictionary || options.allowRowDelete ? (_event: UIEvent, cell: CellComponent) => [
+      contextMenu: ((_event: UIEvent, cell: CellComponent) => [
+        { label: '값 보기', action: () => showValue(cell, column) },
         ...(options.onValueDictionary ? [{ label: '값 사전 추가', action: () => { const chosen = selected(),included = chosen.some(candidate => candidate.getField() === cell.getField() && candidate.getRow().getData()._mvpRow === cell.getRow().getData()._mvpRow); const entries = (included ? chosen.filter(candidate => !model.blankSlot(candidate.getRow().getData() as GridBufferRow)) : [cell]).map(candidate => ({ key: getColumn(candidate.getField())!.key, value: candidate.getValue() })); if (entries.length > 1) options.onValueDictionary?.(column.key, cell.getValue(), entries); else options.onValueDictionary?.(column.key, cell.getValue()); } }] : []),
         ...(options.allowRowDelete ? rowDeleteMenu(cell.getRow()) : []),
-      ] : undefined) as unknown as ColumnDefinition['contextMenu'],
+      ]) as unknown as ColumnDefinition['contextMenu'],
       editable: cell => editableColumn(column) && (cell.getValue() === null || typeof cell.getValue() !== 'object'),
       formatterClipboard: false,
       accessorClipboard: value => rawText(value),
@@ -545,6 +553,8 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
   table.on('columnVisibilityChanged', updateCount);
   table.on('clipboardPasted', () => { void extendSlots(); });
   table.on('cellClick', (_event: UIEvent, cell: CellComponent) => { const column = getColumn(cell.getField()); if (column) openNested(cell, column); });
+  // A read-only cell opens '값 보기' on double click; an editable one edits and a child table cell opens its table (#67).
+  table.on('cellDblClick', (_event: UIEvent, cell: CellComponent) => { const column = getColumn(cell.getField()), value = cell.getValue(); if (column && !editableColumn(column) && !model.blankSlot(cell.getRow().getData() as GridBufferRow) && (value === null || typeof value !== 'object')) showValue(cell, column); });
   const focusSelection = (event: MouseEvent): void => {
     const target = event.target;
     if (!ready || !(target instanceof Element) || target.closest('input,textarea,button,.mvp-grid-nested')) return;
@@ -560,7 +570,7 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
     if (event.isComposing) return;
     if (event.key === 'Escape' && !panel.hidden) { event.preventDefault(); event.stopPropagation(); closePanel(); return; }
     const target = event.target;
-    if (!ready || !(target instanceof Element) || target !== typingTarget && target.closest('input,textarea,select,button,.mvp-grid-nested')) return;
+    if (!ready || !(target instanceof Element) || target !== typingTarget && target.closest('input,textarea,select,button,.mvp-grid-nested,.mvp-grid-panel')) return;
     if ((event.ctrlKey || event.metaKey) && ['z', 'y'].includes(event.key.toLowerCase())) { event.preventDefault(); event.stopImmediatePropagation(); replay(event.key.toLowerCase() === 'z' && !event.shiftKey); return; }
     // A view-only table still moves with the arrows, Shift ranges, Tab, Enter and Esc; edit keys stop at editableColumn (#65).
     const cell = selected()[0]; if (!cell) return;
