@@ -8,7 +8,7 @@ vi.mock('tabulator-tables', () => {
   class MockTable {
     options: any; data: any[]; columns: any[]; listeners = new Map<string, Function[]>(); filter?: Function; destroyed = false;
     rowCache = new WeakMap<object, any>(); rangeCells: any[][] = [];
-    sorters: any[] = [];
+    sorters: any[] = []; setColumnsCalls = 0;
     constructor(_host: unknown, options: any) {
       this.options = options; this.data = structuredClone(options.data);
       this.columns = options.columns.map((definition: any) => this.column(definition)); state.tables.push(this);
@@ -44,6 +44,7 @@ vi.mock('tabulator-tables', () => {
     setFilter(filter: Function) { this.filter = filter; this.fire('dataFiltered'); }
     updateColumnDefinition(field: string, definition: any) { this.getColumn(field).definition = definition; return Promise.resolve(); }
     addColumn(definition: any) { this.columns.push(this.column(definition)); return Promise.resolve(); }
+    setColumns(definitions: any[]) { this.columns = definitions.map(definition => this.column(definition)); this.setColumnsCalls++; return Promise.resolve(); }
     deleteColumn(field: string) { this.columns = this.columns.filter(column => column.getField() !== field); }
     moveColumn(from: string, to: string, after: boolean) {
       const column = this.getColumn(from); this.columns = this.columns.filter(item => item !== column);
@@ -120,21 +121,22 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
   it('still redraws columns when a column setting changes', async () => {
     const handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '열 설정 변경', rows: [{ code: '001', amount: '1234' }], settings });
     const table = state.tables[0]; table.fire('tableBuilt');
-    const update = vi.spyOn(table, 'updateColumnDefinition');
     handle.setSettings({ ...settings, dictionary: { ...settings.dictionary, keys: { ...settings.dictionary.keys, code: '계약번호' } } });
     await new Promise(resolve => setTimeout(resolve, 0));
-    expect(update).toHaveBeenCalled(); handle.destroy();
+    expect(table.setColumnsCalls).toBe(1); expect(table.getColumn('f0').definition.title).toBe('계약번호'); // one column set, not one redraw per column (#68)
+    // The same settings with keys in another order (as saved settings come back) change nothing.
+    const reordered = { ...settings, dictionary: { values: settings.dictionary.values, keys: Object.fromEntries(Object.entries({ ...settings.dictionary.keys, code: '계약번호' }).reverse()) } };
+    handle.setSettings(reordered); await new Promise(resolve => setTimeout(resolve, 0)); expect(table.setColumnsCalls).toBe(1); handle.destroy();
   });
   it('redraws cells when a column format is applied from the header menu', async () => {
     const parent = new FakeElement(), onColumnFormat = vi.fn();
     const handle = renderGrid(parent as unknown as HTMLElement, { label: '열 서식', rows: [{ code: '001', amount: '1234.5' }], settings, onColumnFormat });
     const table = state.tables[0]; table.fire('tableBuilt');
-    const update = vi.spyOn(table, 'updateColumnDefinition');
     table.options.columns[1].headerContextMenu.find((entry: any) => entry.label === '열 서식').action();
     const find = (node: FakeElement): FakeElement | undefined => node.textContent === '적용' && node.listeners.has('click') ? node : node.children.map(find).find(Boolean);
     find(parent)!.fire('click');
     await new Promise(resolve => setTimeout(resolve, 0));
-    expect(onColumnFormat).toHaveBeenCalledWith('amount', { grouping: true }); expect(update).toHaveBeenCalled();
+    expect(onColumnFormat).toHaveBeenCalledWith('amount', { grouping: true }); expect(table.setColumnsCalls).toBe(1);
     expect(handle.rows()).toEqual([{ code: '001', amount: '1234.5' }]); handle.destroy();
   });
   it('moves and hides selected columns as a group and undoes both without changing raw rows', () => {
@@ -205,9 +207,8 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
       handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '넓은 표', rows: source, settings });
       expect(clone.mock.calls.length).toBeLessThan(source.length * 24 * 10);
       const table = state.tables[0]; table.fire('tableBuilt'); clone.mockClear();
-      const update = vi.spyOn(table, 'updateColumnDefinition');
       handle.setSettings({ ...settings, hideEmptyColumns: false });
-      await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(24));
+      await vi.waitFor(() => expect(table.setColumnsCalls).toBe(1));
       expect(clone.mock.calls.length).toBeLessThan(source.length * 24 * 10);
       expect(handle.rows()).toEqual(source);
     } finally { handle?.destroy(); clone.mockRestore(); }
@@ -397,14 +398,14 @@ describe('MVP GridRenderer DOM adapter (synthetic mocks)', () => {
     expect(changed).toHaveBeenCalled();
     handle.destroy(); expect(table.destroyed).toBe(true); expect(parent.children).toHaveLength(0);
   });
-  it('keeps edited buffer and instance when search/settings change; restores hidden empty source columns', () => {
+  it('keeps edited buffer and instance when search/settings change; restores hidden empty source columns', async () => {
     const handle = renderGrid(new FakeElement() as unknown as HTMLElement, { label: '자료', rows: [{ blank: '', code: '001' }], settings });
     const table = state.tables[0]; table.fire('tableBuilt');
     expect(table.getColumn('f0').isVisible()).toBe(false);
     table.getRows()[0].getCell('f1').setValue('002');
     handle.setSearch('002'); handle.setSettings({ ...settings, theme: 'dark', hideEmptyColumns: false });
     expect(state.tables).toHaveLength(1); expect(handle.rows()).toEqual([{ blank: '', code: '002' }]);
-    expect(table.getColumn('f0').isVisible()).toBe(true);
+    await new Promise(resolve => setTimeout(resolve, 0)); expect(table.getColumn('f0').isVisible()).toBe(true);
   });
   it('opens nested source arrays from a cell without losing primitive false/zero values', () => {
     const onNested = vi.fn(), source = [{ items: [0, false, { name: '물품' }] }];

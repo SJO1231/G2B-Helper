@@ -4,7 +4,7 @@ import 'tabulator-tables/dist/css/tabulator.min.css';
 import './grid.css';
 import { setIcon } from './icons';
 import { columnTypeLabels, type GridRendererHandle, type GridRendererOptions, type GridViewState, type JsonRow, type MvpColumnType, type MvpColumnFormat, type MvpSettings } from './contracts';
-import { GridModel, choiceText, compareValues, editedValue, excelFormat, excelValue, exportMatrix, formatValue, isEmpty, matchesView, nestedPreview, parseClipboard, rawText, valueToken, type GridBufferRow, type GridColumn, type GridView } from './grid-model';
+import { GridModel, choiceText, compareValues, editedValue, excelFormat, excelValue, exportMatrix, formatValue, isEmpty, matchesView, nestedPreview, parseClipboard, rawText, stableJson, valueToken, type GridBufferRow, type GridColumn, type GridView } from './grid-model';
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
@@ -622,19 +622,21 @@ export function renderGrid(container: HTMLElement, options: GridRendererOptions)
     setRowFilter: predicate => { rowFilter = predicate; whenReady(applyFilter); },
     setSettings: next => {
       const hideChanged = next.hideEmptyColumns !== settings.hideEmptyColumns || next.hideUnmappedColumns !== settings.hideUnmappedColumns;
-      const columnsChanged = (['hideEmptyColumns', 'hideUnmappedColumns', 'dictionary', 'columnTypes', 'columnFormats'] as const).some(key => JSON.stringify(next[key]) !== JSON.stringify(settings[key]));
+      const columnsChanged = (['hideEmptyColumns', 'hideUnmappedColumns', 'dictionary', 'columnTypes', 'columnFormats'] as const).some(key => stableJson(next[key]) !== stableJson(settings[key]));
       settings = structuredClone(next); root.dataset.theme = settings.theme;
       if (!columnsChanged) return;
       whenReady(() => {
         for (const column of table.getColumns()) if (getColumn(column.getField())) widths.set(column.getField(), column.getWidth());
         if (hideChanged) visibility.clear();
-        const data = rows();
-        for (const column of model.columns) {
-          updateDefinition(column, data);
-          const visible = visibility.get(column.field) ?? (column.user ? userColumnsVisible : model.visible(column, data, settings));
-          visible ? table.showColumn(column.field) : table.hideColumn(column.field);
-        }
-        table.getRows().forEach(row => row.reformat()); applyFilter();
+        // One column set in the current order instead of one full redraw per column (#68).
+        const data = rows(), order = table.getColumns().map(column => getColumn(column.getField())).filter((column): column is GridColumn => !!column);
+        const sorters = table.getSorters().map(sorter => ({ column: sorter.field, dir: sorter.dir }));
+        table.getRanges().forEach(range => range.remove()); rangeAnchor = rangeCursor = undefined;
+        definitionQueue = definitionQueue.then(async () => {
+          if (disposed) return;
+          await table.setColumns(order.map(column => definition(column, data)));
+          if (!disposed) { if (sorters.length) table.setSort(sorters); updateCount(); refreshHeaders(); applyFilter(); }
+        });
       });
     },
     setUserColumnsVisible: (visible: boolean) => {

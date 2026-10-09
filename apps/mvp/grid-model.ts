@@ -7,6 +7,8 @@ export interface GridColumn { key: string; field: string; user: boolean; }
 export type GridBufferRow = Record<string, unknown> & { _mvpRow: number };
 export const isEmpty = (value: unknown): boolean => value === undefined || value === null || value === '';
 export const rawText = (value: unknown): string => value === undefined ? '' : value === null ? 'null' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+/** JSON text that ignores key order: saved settings come back from the Native host with sorted keys (#68). */
+export const stableJson = (value: unknown): string => Array.isArray(value) ? '[' + value.map(stableJson).join(',') + ']' : value !== null && typeof value === 'object' ? '{' + Object.keys(value).sort().map(key => JSON.stringify(key) + ':' + stableJson((value as JsonRow)[key])).join(',') + '}' : JSON.stringify(value) ?? 'null';
 export const valueToken = (value: unknown): string => JSON.stringify([value === undefined ? 'missing' : value === null ? 'null' : typeof value, value]);
 export const choiceText = (value: unknown): string => value === undefined ? '(누락)' : value === null ? '(null)' : value === '' ? '(빈 셀)' : rawText(value);
 const own = (object: object, key: string): boolean => Object.prototype.hasOwnProperty.call(object, key);
